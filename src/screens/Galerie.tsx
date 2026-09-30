@@ -102,6 +102,7 @@ export default function Galerie() {
               <div className="thumb" onClick={() => open(t)}>
                 {t.preview_url ? <img src={t.preview_url} alt={`Aperçu du thème ${t.name}`} loading="lazy" decoding="async" /> : <span className="meta">Aperçu indisponible</span>}
                 <span className="badge">{t.style ?? CATEGORIES.find((c) => c.key === t.category)?.label ?? t.category}</span>
+                {!!t.digits && Object.keys(t.digits as object).length > 0 && <span className="badge" style={{ left: 'auto', right: 10 }}>🔢 Chiffres</span>}
               </div>
               <div className="body">
                 <div className="name">{t.name}</div>

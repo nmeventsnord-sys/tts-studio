@@ -344,12 +344,13 @@ export class StudioEditor {
 
 // ───────────── images ─────────────
   /** Ajoute une image (déjà enregistrée dans assets.ts sous srcKey), centrée et à taille raisonnable. */
-  async addImage(url: string, srcKey: string, role: Role = 'image') {
+  async addImage(url: string, srcKey: string | undefined, role: Role = 'image') {
     const img = (await FabricImage.fromURL(url, { crossOrigin: 'anonymous' })) as FabricImage & EditorObject
     const a = this.area
-    const k = Math.min(((a.right - a.left) * (this.bookmark ? 0.8 : 0.45)) / img.width, ((a.bottom - a.top) * 0.45) / img.height, 1.5)
+    const share = role === 'digit' ? 0.22 : this.bookmark ? 0.8 : 0.45
+    const k = Math.min(((a.right - a.left) * share) / img.width, ((a.bottom - a.top) * share) / img.height, 1.5)
     img.set({ left: (a.left + a.right) / 2, top: (a.top + a.bottom) / 2, scaleX: k, scaleY: k })
-    img.srcKey = srcKey
+    if (srcKey) img.srcKey = srcKey
     img.role = role
     this.add(img)
     this.record(true)
@@ -741,8 +742,6 @@ export class StudioEditor {
   renderNative(opts: { multiplier?: number; filter?: Parameters<Canvas["toCanvasElement"]>[1] extends infer O ? O extends { filter?: infer F } ? F : never : never } = {}) {
     const c = this.canvas
     const vpt = c.viewportTransform.slice() as TMat2D
-    const active = c.getActiveObject()
-    c.discardActiveObject()
     this.exporting = true
     c.viewportTransform = [1, 0, 0, 1, 0, 0]
     try {
@@ -750,7 +749,6 @@ export class StudioEditor {
     } finally {
       this.exporting = false
       c.setViewportTransform(vpt)
-      if (active) c.setActiveObject(active)
       c.requestRenderAll()
     }
   }

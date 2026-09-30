@@ -3,9 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Hero } from '../components/Hero'
 import { CanvaModal } from '../components/CanvaModal'
 import { useSession } from '../lib/session'
-import { supabase } from '../lib/supabase'
-
-export const MAX_PROJECTS = 3
+import { MAX_PROJECTS, projectStore } from '../lib/projects'
 
 /** Écran 1 : choix du parcours. */
 export default function Parcours() {
@@ -15,8 +13,8 @@ export default function Parcours() {
   const [count, setCount] = useState<number | null>(null)
 
   useEffect(() => {
-    if (identity?.kind !== 'user') return
-    supabase.from('client_projects').select('id', { count: 'exact', head: true }).then(({ count }) => setCount(count ?? 0))
+    if (!identity) return
+    projectStore(identity).list().then((l) => setCount(l.length), () => setCount(null))
   }, [identity])
 
   if (!identity) return null

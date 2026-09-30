@@ -4,10 +4,10 @@ import { useSession } from './lib/session'
 import Auth from './screens/Auth'
 import ResetPassword from './screens/ResetPassword'
 import Parcours from './screens/Parcours'
-import Soon from './screens/Soon'
 import Galerie from './screens/Galerie'
 import Formats from './screens/Formats'
 import Editor from './screens/Editor'
+import Projets from './screens/Projets'
 
 /** Toutes les pages du Studio demandent une identité (compte ou invité). */
 function RequireIdentity({ children }: { children: ReactNode }) {
@@ -29,7 +29,7 @@ export default function App() {
       <Route path="/themes" element={guard(<Galerie />)} />
       <Route path="/formats/:themeId" element={guard(<Formats />)} />
       <Route path="/editeur" element={guard(<Editor />)} />
-      <Route path="/projets" element={guard(<Soon title="Mes projets" step="étape 7" />)} />
+      <Route path="/projets" element={guard(<Projets />)} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

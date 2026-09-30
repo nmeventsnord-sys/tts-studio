@@ -14,6 +14,10 @@ import { FREE_FORMATS, THEME_FORMATS, defText, readInfo, type FreeFormatKey } fr
 import { loadLibrary, type LibraryFont } from '../data/fontLibrary'
 import { loadFont, loadFonts } from '../lib/fonts'
 import { getTheme, type DefText, type FormatKey, type Theme, type ThemeFont } from '../lib/themes'
+import { useSession } from '../lib/session'
+import { convertV1, projectStore, readProject, type ProjectData, type ProjectMeta, type ProjectRow } from '../lib/projects'
+import { useProject } from '../editor/useProject'
+import { ProjectModals } from '../editor/ProjectModals'
 import '../styles/editor.css'
 
 const BASE_PALETTE = ['#1a1410', '#ffffff', '#C9A84C', '#d85a30', '#3a5a8c', '#4f6b45']
@@ -25,16 +29,34 @@ type Spec = { w: number; h: number; bookmark: boolean; title: string; src?: stri
 export default function Editor() {
   const [params] = useSearchParams()
   const nav = useNavigate()
-  const themeKey = params.get('theme')
-  const fmtKey = params.get('format') ?? ''
-  const libre = params.get('libre') as FreeFormatKey | null
+  const identity = useSession().identity!
+  const projectId = params.get('projet')
+
+  // Projet rouvert (?projet=) : le thème et le format viennent du projet enregistré.
+  type Loaded = { row: ProjectRow; data: ProjectData | null; legacy: ReturnType<typeof readProject>['legacy'] }
+  const [loaded, setLoaded] = useState<Loaded | null | undefined>(projectId ? undefined : null)
+  const [reloadKey, setReloadKey] = useState(0)
+  useEffect(() => {
+    if (!projectId) { setLoaded(null); return }
+    let ok = true
+    projectStore(identity).get(projectId).then(
+      (row) => { if (!ok) return; if (!row) { setError("Ce projet n'existe plus."); return } setLoaded({ row, ...readProject(row) }) },
+      (e) => ok && setError((e as Error).message),
+    )
+    return () => { ok = false }
+  }, [projectId, identity, reloadKey])
+
+  const meta0 = loaded?.data?.meta
+  const themeKey = loaded ? meta0?.theme ?? (loaded.row.parcours === 'libre' ? null : loaded.row.theme_id) : params.get('theme')
+  const libre = (loaded ? meta0?.libre ?? (loaded.row.parcours === 'libre' ? loaded.row.format_key : null) : params.get('libre')) as FreeFormatKey | null
+  const fmtKey = (loaded ? meta0?.format ?? loaded.row.format_key : params.get('format')) ?? ''
 
   const hostRef = useRef<HTMLDivElement>(null)
-  const [theme, setTheme] = useState<Theme | null | undefined>(libre ? null : undefined)
+  const [theme, setTheme] = useState<Theme | null | undefined>(undefined)
   const [ed, setEd] = useState<StudioEditor | null>(null)
   const [, rerender] = useReducer((x: number) => x + 1, 0)
   const [error, setError] = useState('')
-  const [fly, setFly] = useState<'text' | 'image' | 'bg' | null>(null)
+  const [fly, setFly] = useState<'text' | 'image' | 'bg' | 'digits' | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [tuto, setTuto] = useState(false)
@@ -49,7 +71,8 @@ export default function Editor() {
   }, [])
 
   useEffect(() => {
-    if (libre || !themeKey) return
+    if (libre) { setTheme(null); return }
+    if (!themeKey) return
     getTheme(themeKey).then((t) => setTheme(t ?? null), (e) => setError(e.message))
   }, [themeKey, libre])
   useEffect(() => { loadLibrary().then(setLib) }, [])
@@ -59,11 +82,12 @@ export default function Editor() {
       const f = FREE_FORMATS[libre]
       return f ? { w: f.w, h: f.h, bookmark: 'bookmark' in f, title: f.title } : null
     }
+    if (loaded === undefined) return null
     const f = theme?.fmts?.[fmtKey as FormatKey]
     if (!theme || !f) return null
     const meta = THEME_FORMATS[fmtKey as FormatKey]
     return { w: f.w, h: f.h, bookmark: !!meta?.bookmark, title: meta?.title ?? f.lbl ?? fmtKey, src: f.src, def: f.def }
-  }, [libre, theme, fmtKey])
+  }, [libre, theme, fmtKey, loaded])
 
   const themeFonts = useMemo<ThemeFont[]>(() => {
     // Dédoublonnage par nom (certains thèmes listent deux fois la même police).
@@ -71,6 +95,9 @@ export default function Editor() {
     if (theme?.font_name && !list.some((f) => f.name === theme.font_name)) list.unshift(googleFont(theme.font_name))
     return list
   }, [theme])
+
+  /** Chiffres 0-9 du thème (badge « Chiffres » de la galerie). */
+  const digits = useMemo(() => Object.entries((theme?.digits ?? {}) as Record<string, string>).filter(([k, v]) => /^\d$/.test(k) && v).sort(), [theme])
 
   const palette = useMemo(() => {
     const fromTheme = (spec?.def ?? []).map((d) => d.c).filter(Boolean)
@@ -96,6 +123,22 @@ export default function Editor() {
         // Les polices d'abord : sinon Fabric mesure les textes avec la police de repli.
         await loadFonts(themeFonts)
         if (!alive) return
+        const saved = loaded?.data?.doc ?? (loaded?.legacy ? convertV1(loaded.legacy, spec) : null)
+        if (saved) {
+          // Projet rouvert : on recharge d'abord TOUTES ses polices (bug de l'existant : export en police de repli).
+          const used = new Set(saved.objects.map((o) => o.fontFamily as string | undefined).filter(Boolean) as string[])
+          const lib = await loadLibrary()
+          await Promise.all([...used].map((n) => {
+            const f = themeFonts.find((x) => x.name === n) ?? lib.find((x) => x.name === n)
+            return f ? loadFont(f) : null
+          }))
+          await e.loadJSON(saved)
+          if (!e.background) await e.applyBackground(spec.src ? { kind: 'theme', src: spec.src } : { kind: 'color', color: '#ffffff' })
+          e.resetHistory()
+          if (!alive) return
+          setEd(e)
+          return
+        }
         if (spec.src) await e.setBackgroundImage(spec.src, { kind: 'theme', src: spec.src })
         else e.setBackgroundColor('#ffffff')
         const info = readInfo()
@@ -129,7 +172,14 @@ export default function Editor() {
       e.dispose()
       box.remove()
     }
-  }, [spec, themeFonts, libre])
+  }, [spec, themeFonts, libre, loaded])
+
+  const title = libre ? 'Création libre' : theme?.name ?? '…'
+  const defaultName = `${title} — ${spec?.title ?? ''}`
+  const meta = useMemo<ProjectMeta | null>(() => (spec ? {
+    theme: theme?.slug ?? theme?.id, themeName: theme?.name, format: libre ?? fmtKey, libre: libre ?? undefined, info: readInfo(),
+  } : null), [spec, theme, libre, fmtKey])
+  const project = useProject({ ed, identity, meta, themeId: theme?.id ?? null, defaultName, initial: loaded?.row ?? null, say })
 
   // Avertit avant de quitter avec des changements non sauvegardés.
   useEffect(() => {
@@ -288,8 +338,7 @@ export default function Editor() {
     ]
   }, [ed, libre])
 
-  const back = () => nav(libre ? '/formats/libre' : `/formats/${themeKey}`)
-  const title = libre ? 'Création libre' : theme?.name ?? '…'
+  const back = () => nav(libre ? '/formats/libre' : `/formats/${theme?.slug ?? themeKey}`)
 
   if (!libre && theme === null) {
     return <div className="wrap"><div className="soon">Ce thème ou ce format n'existe plus. <button className="linkbtn" onClick={() => nav('/themes')}>Voir les thèmes</button></div></div>
@@ -299,11 +348,11 @@ export default function Editor() {
     <section className="ed">
       <div className="ed-top">
         <button className="ib" onClick={back}>← Formats</button>
-        <div className="t"><b>{title}</b> · {spec?.title ?? ''} · <span>{ed?.dirty ? 'modifications non sauvegardées' : 'aucune modification'}</span></div>
+        <div className="t"><b>{title}</b> · {spec?.title ?? ''} · <span>{project.status}</span></div>
         <button className="ib" disabled={!ed?.canUndo} onClick={() => ed?.undo()} title="Annuler (Ctrl+Z)">↶ <span className="hide-sm">Annuler</span></button>
         <button className="ib" disabled={!ed?.canRedo} onClick={() => ed?.redo()} title="Refaire (Ctrl+Y)">↷ <span className="hide-sm">Refaire</span></button>
         <button className="ib sq" onClick={() => setTuto(true)} title="Revoir le tutoriel" aria-label="Revoir le tutoriel">?</button>
-        <button className="ib" onClick={() => soon('Sauvegarde des projets', 7)}>💾 <span className="hide-sm">Sauvegarder</span></button>
+        <button className="ib" disabled={!ed || project.saving} onClick={() => project.save()}>💾 <span className="hide-sm">Sauvegarder</span></button>
         <button className="ib gold" data-tuto="send" onClick={() => soon("L'envoi du projet", 8)}>Envoyer <span className="hide-sm">le projet terminé</span> →</button>
       </div>
 
@@ -325,6 +374,16 @@ export default function Editor() {
             </div>
           )}
           <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { importFiles([...(e.target.files ?? [])]); e.target.value = '' }} />
+          {digits.length > 0 && (
+            <button className={fly === 'digits' ? 'on' : ''} onClick={() => setFly(fly === 'digits' ? null : 'digits')}><span>🔢</span>Chiffres<div className="tip">Ajouter un chiffre du thème</div></button>
+          )}
+          {fly === 'digits' && (
+            <div className="flyout digits" style={{ top: 130 }}>
+              {digits.map(([d, url]) => (
+                <button key={d} title={`Ajouter le ${d}`} onClick={() => { ed?.addImage(url, undefined, 'digit'); setFly(null) }}><img src={url} alt={d} /></button>
+              ))}
+            </div>
+          )}
           <button data-tuto="zone" onClick={addZone}><span>📷</span>Prise de vue<div className="tip">Ajouter une prise de vue</div></button>
           <button data-tuto="bg" className={fly === 'bg' ? 'on' : ''} onClick={() => setFly(fly === 'bg' ? null : 'bg')}><span>🎨</span>Fonds<div className="tip">Changer le fond</div></button>
           {fly === 'bg' && ed && <BackgroundPicker ed={ed} themeSrc={spec?.src} onDone={(m) => say(m)} />}
@@ -357,6 +416,17 @@ export default function Editor() {
         {ed ? <Panel ed={ed} themeFonts={themeFonts} palette={palette} onFont={applyFont} onAddText={() => addText('body')} onCutout={cutout} /> : <aside className="panel" />}
       </div>
       {tuto && ed && <Tutorial steps={tutoSteps} onClose={closeTuto} />}
+      {project.modal && (
+        <ProjectModals
+          key={project.modal.kind}
+          modal={project.modal}
+          store={project.store}
+          defaultName={project.proj?.name ?? defaultName}
+          onClose={() => project.setModal(null)}
+          onSave={(o) => project.save(o)}
+          onReload={() => { const id = project.proj?.id; project.setModal(null); if (ed) ed.dirty = false; setLoaded(undefined); if (id) nav(`/editeur?projet=${id}`, { replace: true }); setReloadKey((k) => k + 1) }}
+        />
+      )}
     </section>
   )
 }
