@@ -10,6 +10,9 @@ import {
   util,
   type TMat2D,
 } from 'fabric'
+import { assetUrl, putEditedAsset } from './assets'
+import { renderBackground } from './backgrounds'
+import { canvasBlob, dilate, eraseMask, elementMask, maskBounds, readPixels, toCanvas, wandMask } from './pixels'
 
 /**
  * Moteur de l'éditeur (Fabric 7).
@@ -41,7 +44,15 @@ export type Role = 'names' | 'date' | 'text' | 'image' | 'zone' | 'digit'
 export type EditorObject = FabricObject & { uid?: string; role?: Role; zone?: number; locked?: boolean; srcKey?: string }
 export type TextObject = IText & { uid?: string; role?: Role }
 
-export type DocBackground = { kind: 'theme'; src: string } | { kind: 'color'; color: string } | { kind: 'generated'; id: string; src?: string }
+export type DocBackground =
+  | { kind: 'theme'; src: string }
+  | { kind: 'color'; color: string }
+  | { kind: 'generated'; id: string }
+  /** fond retouché (main magique) : fichier gardé comme les images importées */
+  | { kind: 'asset'; key: string; src: string; from?: DocBackground }
+
+export type Tool = 'select' | 'hand' | 'wand' | 'eraser'
+export type ToolResult = 'ok' | 'noimage' | 'nobg' | 'empty' | 'toobig' | 'busy'
 export type DocJSON = {
   v: 2
   w: number
@@ -105,6 +116,13 @@ export class StudioEditor {
   private loading = false
   private clip: EditorObject | null = null
   dirty = false
+  tool: Tool = 'select'
+  toolOpts = { tol: 30, contiguous: true, brush: 40 }
+  busy = false
+  private eraser: { img: FabricImage & EditorObject; work: HTMLCanvasElement; last: Point } | null = null
+  private pointer: Point | null = null
+  /** Rappel de l'interface après un clic d'outil (message à afficher). */
+  onToolResult?: (tool: Tool, r: ToolResult) => void
 
   constructor(el: HTMLCanvasElement, host: HTMLElement, opts: { w: number; h: number; bookmark?: boolean }) {
     this.host = host
@@ -128,6 +146,8 @@ export class StudioEditor {
   // ───────────── abonnement React ─────────────
   on(fn: Listener) { this.listeners.add(fn); return () => { this.listeners.delete(fn) } }
   private emit() { this.listeners.forEach((f) => f()) }
+  /** Prévient l'interface d'un changement de réglage. */
+  touch() { this.emit() }
 
   dispose() {
     this.ro.disconnect()
@@ -215,6 +235,34 @@ export class StudioEditor {
     this.canvas.backgroundImage = img
     this.background = bg
     this.canvas.requestRenderAll()
+  }
+
+/** Fond de la bibliothèque (dessiné en pleine résolution ; deux bandes identiques pour un marque-page). */
+  setGeneratedBackground(id: string) {
+    const bw = this.bookmark ? this.w / 2 : this.w
+    const tile = renderBackground(id, bw, this.h)
+    let el = tile
+    if (this.bookmark) {
+      el = document.createElement('canvas')
+      el.width = this.w
+      el.height = this.h
+      const g = el.getContext('2d')!
+      g.drawImage(tile, 0, 0)
+      g.drawImage(tile, bw, 0)
+    }
+    const img = new FabricImage(el, { originX: 'left', originY: 'top', left: 0, top: 0, selectable: false, evented: false })
+    this.canvas.backgroundImage = img
+    this.background = { kind: 'generated', id }
+    this.canvas.requestRenderAll()
+  }
+
+  /** Applique un fond décrit (chargement, annuler/refaire). */
+  async applyBackground(bg: DocBackground | null) {
+    if (!bg) { this.canvas.backgroundImage = undefined; this.background = null; this.canvas.requestRenderAll(); return }
+    if (bg.kind === 'color') this.setBackgroundColor(bg.color)
+    else if (bg.kind === 'generated') this.setGeneratedBackground(bg.id)
+    else if (bg.kind === 'asset') await this.setBackgroundImage((await assetUrl(bg.key)) ?? bg.src, bg)
+    else await this.setBackgroundImage(bg.src, bg)
   }
 
   setBackgroundColor(color: string) {
@@ -408,6 +456,170 @@ export class StudioEditor {
     }
   }
 
+// ───────────── outils : main magique, baguette, gomme ─────────────
+  setTool(t: Tool) {
+    const c = this.canvas
+    this.tool = t
+    const sel = t === 'select'
+    c.selection = sel
+    c.skipTargetFind = !sel
+    c.defaultCursor = sel ? 'default' : t === 'eraser' ? 'none' : 'crosshair'
+    c.hoverCursor = sel ? 'move' : c.defaultCursor
+    if (!sel && t !== 'eraser') c.discardActiveObject()
+    c.requestRenderAll()
+    this.emit()
+  }
+
+  /** Image la plus haute sous un point de la page. */
+  imageAt(p: Point) {
+    const objs = this.objects
+    for (let i = objs.length - 1; i >= 0; i--) {
+      const o = objs[i]
+      if (o instanceof FabricImage && o.visible && o.containsPoint(p)) return o as FabricImage & EditorObject
+    }
+    return undefined
+  }
+
+  /** Point de la page → pixel de l'image source (rotation, échelle et miroir compris). */
+  private imagePixel(img: FabricImage, p: Point) {
+    const local = util.transformPoint(p, util.invertTransform(img.calcTransformMatrix()))
+    return { x: Math.floor(local.x + img.width / 2), y: Math.floor(local.y + img.height / 2) }
+  }
+
+  /** Baguette : efface la zone de couleur cliquée dans l'image. */
+  async wandAt(p: Point): Promise<ToolResult> {
+    const img = this.imageAt(p)
+    if (!img) return 'noimage'
+    const { x, y } = this.imagePixel(img, p)
+    if (x < 0 || y < 0 || x >= img.width || y >= img.height) return 'noimage'
+    const data = readPixels(img.getElement() as HTMLImageElement, img.width, img.height)
+    const mask = wandMask(data, x, y, this.toolOpts.tol, this.toolOpts.contiguous)
+    eraseMask(data, mask)
+    const { key, url } = await putEditedAsset(await canvasBlob(toCanvas(data)))
+    await this.replaceImage(img, url, key)
+    return 'ok'
+  }
+
+  /**
+   * Main magique : détache le motif cliqué du fond du template pour en faire un élément déplaçable ;
+   * l'emplacement d'origine est rebouché avec la couleur dominante du fond.
+   */
+  async magicHandAt(p: Point): Promise<ToolResult> {
+    const bgImg = this.canvas.backgroundImage as FabricImage | undefined
+    if (!bgImg) return 'nobg'
+    const W = bgImg.width
+    const H = bgImg.height
+    const sx = this.w / W
+    const sy = this.h / H
+    const x = Math.floor(p.x / sx)
+    const y = Math.floor(p.y / sy)
+    if (x < 0 || y < 0 || x >= W || y >= H) return 'empty'
+    const data = readPixels(bgImg.getElement() as HTMLImageElement, W, H)
+    const { mask, bg } = elementMask(data, x, y, this.toolOpts.tol)
+    const b = maskBounds(mask, W)
+    if (!b || b.n < 30) return 'empty'
+    if (b.n > W * H * 0.45) return 'toobig'
+
+    // l'élément extrait
+    const part = new ImageData(b.w, b.h)
+    for (let yy = 0; yy < b.h; yy++)
+      for (let xx = 0; xx < b.w; xx++) {
+        const sp = (b.y + yy) * W + (b.x + xx)
+        if (!mask[sp]) continue
+        const si = sp * 4
+        const di = (yy * b.w + xx) * 4
+        part.data[di] = data.data[si]
+        part.data[di + 1] = data.data[si + 1]
+        part.data[di + 2] = data.data[si + 2]
+        part.data[di + 3] = data.data[si + 3]
+      }
+    const partAsset = await putEditedAsset(await canvasBlob(toCanvas(part)))
+
+    // le fond rebouché (et la bande de droite d'un marque-page, qui est la copie)
+    const fillMask = dilate(mask, W, H, 2)
+    const half = Math.floor(W / 2)
+    for (let q = 0; q < fillMask.length; q++) {
+      if (!fillMask[q]) continue
+      const targets = [q]
+      if (this.bookmark && q % W < half) targets.push(q + half)
+      for (const t of targets) data.data.set(bg, t * 4)
+    }
+    const bgAsset = await putEditedAsset(await canvasBlob(toCanvas(data)))
+    const from = this.background?.kind === 'asset' ? this.background.from : this.background ?? undefined
+    await this.setBackgroundImage(bgAsset.url, { kind: 'asset', key: bgAsset.key, src: bgAsset.url, from })
+
+    const el = (await FabricImage.fromURL(partAsset.url)) as FabricImage & EditorObject
+    el.set({ left: (b.x + b.w / 2) * sx, top: (b.y + b.h / 2) * sy, scaleX: sx, scaleY: sy })
+    el.srcKey = partAsset.key
+    el.role = 'image'
+    this.add(el)
+    this.setTool('select')
+    this.canvas.setActiveObject(el)
+    this.record(true)
+    return 'ok'
+  }
+
+  private async runTool(p: Point) {
+    if (this.busy) { this.onToolResult?.(this.tool, 'busy'); return }
+    this.busy = true
+    this.emit()
+    const tool = this.tool
+    try {
+      const r = tool === 'wand' ? await this.wandAt(p) : await this.magicHandAt(p)
+      this.onToolResult?.(tool, r)
+    } catch (e) {
+      console.error(e)
+      this.onToolResult?.(tool, 'empty')
+    } finally {
+      this.busy = false
+      this.emit()
+    }
+  }
+
+  // gomme : on peint en « destination-out » sur une copie de l'image, aperçu en direct
+  private eraseStart(p: Point) {
+    const img = (this.active instanceof FabricImage ? this.active : undefined) as (FabricImage & EditorObject) | undefined
+    const target = img && img.containsPoint(p) ? img : this.imageAt(p)
+    if (!target) { this.onToolResult?.('eraser', 'noimage'); return }
+    const work = document.createElement('canvas')
+    work.width = target.width
+    work.height = target.height
+    work.getContext('2d')!.drawImage(target.getElement() as HTMLImageElement, 0, 0, target.width, target.height)
+    this.eraser = { img: target, work, last: p }
+    target.setElement(work)
+    this.eraseTo(p)
+  }
+
+  private eraseTo(p: Point) {
+    const e = this.eraser
+    if (!e) return
+    const a = this.imagePixel(e.img, e.last)
+    const b = this.imagePixel(e.img, p)
+    const ctx = e.work.getContext('2d')!
+    const r = this.toolOpts.brush / this.scale / Math.abs(e.img.scaleX ?? 1)
+    ctx.save()
+    ctx.globalCompositeOperation = 'destination-out'
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    ctx.lineWidth = r
+    ctx.beginPath()
+    ctx.moveTo(a.x, a.y)
+    ctx.lineTo(b.x + 0.01, b.y)
+    ctx.stroke()
+    ctx.restore()
+    e.last = p
+    e.img.dirty = true
+    this.canvas.requestRenderAll()
+  }
+
+  private async eraseEnd() {
+    const e = this.eraser
+    this.eraser = null
+    if (!e) return
+    const { key, url } = await putEditedAsset(await canvasBlob(e.work))
+    await this.replaceImage(e.img, url, key)
+  }
+
   forward() { const o = this.active; if (o) { this.canvas.bringObjectForward(o); this.afterReorder() } }
   backward() { const o = this.active; if (o) { this.canvas.sendObjectBackwards(o); this.afterReorder() } }
   private afterReorder() { this.canvas.requestRenderAll(); this.record(); this.emit() }
@@ -488,7 +700,10 @@ export class StudioEditor {
 
   private async restore(s: string) {
     this.restoring = true
-    try { await this.loadJSON(JSON.parse(s), false) } finally { this.restoring = false }
+    try {
+      const doc = JSON.parse(s) as DocJSON
+      await this.loadJSON(doc, JSON.stringify(doc.background) !== JSON.stringify(this.background))
+    } finally { this.restoring = false }
     this.dirty = true
     this.emit()
   }
@@ -511,14 +726,11 @@ export class StudioEditor {
     this.loading = true
     c.discardActiveObject()
     c.remove(...c.getObjects())
-    const objs = (await util.enlivenObjects(doc.objects)) as EditorObject[]
+    const src = await Promise.all(doc.objects.map(async (o) => (o.srcKey ? { ...o, src: (await assetUrl(String(o.srcKey))) ?? o.src } : o)))
+    const objs = (await util.enlivenObjects(src)) as EditorObject[]
     objs.forEach((o) => { if (o.role === 'zone') this.styleZone(o); c.add(o) })
     this.loading = false
-    if (withBackground && doc.background) {
-      const bg = doc.background
-      if (bg.kind === 'color') this.setBackgroundColor(bg.color)
-      else if (bg.src) await this.setBackgroundImage(bg.src, bg)
-    }
+    if (withBackground) await this.applyBackground(doc.background)
     const again = objs.find((o) => o.uid === activeUid)
     if (again) c.setActiveObject(again)
     c.requestRenderAll()
@@ -569,6 +781,13 @@ export class StudioEditor {
       ctx.transform(v[0], v[1], v[2], v[3], v[4], v[5])
       if (this.bookmark) this.renderMirror(ctx)
       if (!this.exporting) this.renderGuides(ctx, v[0])
+      if (!this.exporting && this.tool === 'eraser' && this.pointer) {
+        ctx.beginPath()
+        ctx.arc(this.pointer.x, this.pointer.y, this.toolOpts.brush / 2 / v[0], 0, Math.PI * 2)
+        ctx.lineWidth = 1.5 / v[0]
+        ctx.strokeStyle = '#7c5cff'
+        ctx.stroke()
+      }
       ctx.restore()
     })
 
@@ -630,6 +849,12 @@ export class StudioEditor {
     // Déplacement de la vue : espace + glisser, ou clic molette.
     c.on('mouse:down', (opt) => {
       const e = opt.e as MouseEvent
+      if (this.tool !== 'select' && !this.spaceDown && e.button !== 1) {
+        const p = c.getScenePoint(e)
+        if (this.tool === 'eraser') this.eraseStart(p)
+        else this.runTool(p)
+        return
+      }
       if (this.spaceDown || e.button === 1) {
         this.panning = { x: e.clientX, y: e.clientY }
         c.selection = false
@@ -637,12 +862,21 @@ export class StudioEditor {
       }
     })
     c.on('mouse:move', (opt) => {
+      if (this.tool === 'eraser') {
+        this.pointer = c.getScenePoint(opt.e as MouseEvent)
+        if (this.eraser) this.eraseTo(this.pointer)
+        else c.requestRenderAll()
+      }
       if (!this.panning) return
       const e = opt.e as MouseEvent
       this.pan(e.clientX - this.panning.x, e.clientY - this.panning.y)
       this.panning = { x: e.clientX, y: e.clientY }
     })
-    c.on('mouse:up', () => { if (this.panning) { this.panning = null; c.selection = true } })
+    c.on('mouse:up', () => {
+      if (this.eraser) this.eraseEnd()
+      if (this.panning) { this.panning = null; c.selection = this.tool === 'select' }
+    })
+    c.on('mouse:out', () => { if (this.tool === 'eraser') { this.pointer = null; c.requestRenderAll() } })
 
     window.addEventListener('keydown', this.onKeyDown)
     window.addEventListener('keyup', this.onKeyUp)
@@ -667,6 +901,7 @@ export class StudioEditor {
     if (mod && k === '-') { e.preventDefault(); this.zoomBy(-1); return }
     if (mod && k === '0') { e.preventDefault(); this.zoomFit(); return }
     if (k === 'delete' || k === 'backspace') { if (this.active) { e.preventDefault(); this.remove() } return }
+    if (k === 'escape' && this.tool !== 'select') { this.setTool('select'); return }
     if (k === 'escape') { this.canvas.discardActiveObject(); this.canvas.requestRenderAll(); return }
     const arrows: Record<string, [number, number]> = { arrowleft: [-1, 0], arrowright: [1, 0], arrowup: [0, -1], arrowdown: [0, 1] }
     const o = this.active

@@ -2,7 +2,11 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { IText } from 'fabric'
 import { StudioEditor, ZONE_MAX } from '../editor/engine'
-import { putAsset } from '../editor/assets'
+import { getAssetBlob, putAsset, putEditedAsset } from '../editor/assets'
+import { BackgroundPicker } from '../editor/BackgroundPicker'
+import { removeBackgroundAI } from '../editor/cutout'
+import { FabricImage } from 'fabric'
+import type { Tool, ToolResult } from '../editor/engine'
 import { ContextBar } from '../editor/ContextBar'
 import { Panel } from '../editor/Panel'
 import { Tutorial, type TutoStep } from '../editor/Tutorial'
@@ -30,17 +34,18 @@ export default function Editor() {
   const [ed, setEd] = useState<StudioEditor | null>(null)
   const [, rerender] = useReducer((x: number) => x + 1, 0)
   const [error, setError] = useState('')
-  const [fly, setFly] = useState<'text' | 'image' | null>(null)
+  const [fly, setFly] = useState<'text' | 'image' | 'bg' | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [tuto, setTuto] = useState(false)
   const [lib, setLib] = useState<LibraryFont[]>([])
   const toastTimer = useRef(0)
 
-  const say = useCallback((html: string) => {
+  /** Message dans le canvas ; ms = 0 le laisse affiché (progression). */
+  const say = useCallback((html: string, ms = 2800) => {
     setToast(html)
     clearTimeout(toastTimer.current)
-    toastTimer.current = window.setTimeout(() => setToast(null), 2800)
+    if (ms) toastTimer.current = window.setTimeout(() => setToast(null), ms)
   }, [])
 
   useEffect(() => {
@@ -201,6 +206,49 @@ export default function Editor() {
     else say(`Zone ${n} ajoutée · proportions verrouillées`)
   }, [ed, say])
 
+  // Retour des outils (main magique, baguette, gomme)
+  useEffect(() => {
+    if (!ed) return
+    const msgs: Partial<Record<`${Tool}:${ToolResult}`, string>> = {
+      'hand:ok': 'Élément détaché : <b>déplace-le</b>, agrandis-le ou supprime-le',
+      'hand:empty': 'Rien à détacher ici : clique <b>sur un motif</b> du design. Si le motif se confond avec le fond (photo, paillettes), baisse la tolérance.',
+      'hand:toobig': 'Ce motif couvre trop de surface : baisse la tolérance ou clique sur un élément plus isolé',
+      'hand:nobg': 'Il n\u2019y a pas de fond à modifier',
+      'wand:noimage': 'Clique sur une <b>image importée</b>. Pour le fond du thème, utilise la main magique.',
+      'eraser:noimage': 'Commence sur une <b>image importée</b>',
+      'wand:busy': 'Un instant, traitement en cours…',
+      'hand:busy': 'Un instant, traitement en cours…',
+    }
+    ed.onToolResult = (tool, r) => { const m = msgs[`${tool}:${r}`]; if (m) say(m, 3600) }
+    return () => { ed.onToolResult = undefined }
+  }, [ed, say])
+
+  const toggleTool = (t: Tool) => { if (!ed) return; setFly(null); ed.setTool(ed.tool === t ? 'select' : t) }
+
+  /** Détourage IA de l'image sélectionnée (modèle chargé à la première utilisation). */
+  const cutout = useCallback(async () => {
+    const img = ed?.active
+    if (!ed || !(img instanceof FabricImage)) return
+    const key = (img as { srcKey?: string }).srcKey
+    ed.busy = true
+    ed.touch()
+    say('✨ Détourage en préparation…', 0)
+    try {
+      const src = (key && (await getAssetBlob(key))) || (await (await fetch(img.getSrc())).blob())
+      const out = await removeBackgroundAI(src, (pct) => say(`✨ Téléchargement du modèle IA (une seule fois) : <b>${pct} %</b>`, 0))
+      say('✨ Détourage en cours…', 0)
+      const { key: k2, url } = await putEditedAsset(out)
+      await ed.replaceImage(img, url, k2)
+      say('Fond supprimé ✨ · Ctrl+Z pour revenir en arrière')
+    } catch (err) {
+      console.error(err)
+      say("Le détourage n'a pas abouti. Essaie la baguette magique ou la gomme.", 4000)
+    } finally {
+      ed.busy = false
+      ed.touch()
+    }
+  }, [ed, say])
+
   const soon = (what: string, step: number) => say(`${what} : arrive à l'<b>étape ${step}</b>`)
 
   const closeTuto = useCallback(() => {
@@ -278,10 +326,11 @@ export default function Editor() {
           )}
           <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { importFiles([...(e.target.files ?? [])]); e.target.value = '' }} />
           <button data-tuto="zone" onClick={addZone}><span>📷</span>Prise de vue<div className="tip">Ajouter une prise de vue</div></button>
-          <button data-tuto="bg" onClick={() => soon('Les fonds', 6)}><span>🎨</span>Fonds<div className="tip">Changer le fond</div></button>
-          <button onClick={() => soon('La main magique', 6)}><span>✋</span>Main<div className="tip">Déplacer un élément du design</div></button>
-          <button onClick={() => soon('La baguette magique', 6)}><span>🪄</span>Baguette<div className="tip">Détourer par clic</div></button>
-          <button onClick={() => soon('La gomme', 6)}><span>🧽</span>Gomme<div className="tip">Effacer une zone</div></button>
+          <button data-tuto="bg" className={fly === 'bg' ? 'on' : ''} onClick={() => setFly(fly === 'bg' ? null : 'bg')}><span>🎨</span>Fonds<div className="tip">Changer le fond</div></button>
+          {fly === 'bg' && ed && <BackgroundPicker ed={ed} themeSrc={spec?.src} onDone={(m) => say(m)} />}
+          <button className={ed?.tool === 'hand' ? 'on' : ''} onClick={() => toggleTool('hand')}><span>✋</span>Main<div className="tip">Déplacer un élément du design</div></button>
+          <button className={ed?.tool === 'wand' ? 'on' : ''} onClick={() => toggleTool('wand')}><span>🪄</span>Baguette<div className="tip">Détourer par clic</div></button>
+          <button className={ed?.tool === 'eraser' ? 'on' : ''} onClick={() => toggleTool('eraser')}><span>🧽</span>Gomme<div className="tip">Effacer une zone</div></button>
         </nav>
 
         <div
@@ -305,7 +354,7 @@ export default function Editor() {
           <button className="help" onClick={() => soon("« Besoin d'aide ? »", 9)}>? Besoin d'aide</button>
         </div>
 
-        {ed ? <Panel ed={ed} themeFonts={themeFonts} palette={palette} onFont={applyFont} onAddText={() => addText('body')} /> : <aside className="panel" />}
+        {ed ? <Panel ed={ed} themeFonts={themeFonts} palette={palette} onFont={applyFont} onAddText={() => addText('body')} onCutout={cutout} /> : <aside className="panel" />}
       </div>
       {tuto && ed && <Tutorial steps={tutoSteps} onClose={closeTuto} />}
     </section>

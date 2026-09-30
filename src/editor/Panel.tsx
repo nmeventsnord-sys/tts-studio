@@ -6,6 +6,7 @@ import { FONT_CATS, loadLibrary, type FontCat, type LibraryFont } from '../data/
 import { fold } from '../lib/themes'
 import { loadFont } from '../lib/fonts'
 import { ColorRow } from './ColorRow'
+import { ToolPanel } from './ToolPanel'
 
 type Props = {
   ed: StudioEditor
@@ -13,10 +14,11 @@ type Props = {
   palette: string[]
   onFont: (f: ThemeFont) => void
   onAddText: () => void
+  onCutout: () => void
 }
 
 /** Panneau droit : taille & style, couleur, opacité, espacements, polices du template + bibliothèque. */
-export function Panel({ ed, themeFonts, palette, onFont, onAddText }: Props) {
+export function Panel({ ed, themeFonts, palette, onFont, onAddText, onCutout }: Props) {
   const o = ed.active
   const t = o instanceof IText ? o : null
   const [lib, setLib] = useState<LibraryFont[]>([])
@@ -42,6 +44,8 @@ export function Panel({ ed, themeFonts, palette, onFont, onAddText }: Props) {
     const list = q ? [...byCat.values()].flat().slice(0, 30) : open ? byCat.get(open) ?? [] : []
     list.forEach((f) => loadFont(f))
   }, [open, q, byCat])
+
+  if (ed.tool !== 'select') return <ToolPanel ed={ed} />
 
   if (!o) {
     return (
@@ -120,6 +124,11 @@ export function Panel({ ed, themeFonts, palette, onFont, onAddText }: Props) {
           <div className="pr">
             <button className="pb" onClick={() => ed.update(o, { flipX: !o.flipX })}>⇋ Retourner</button>
             <button className="pb" onClick={() => ed.update(o, { angle: 0 })}>⟲ Redresser</button>
+          </div>
+          <button className="pb full" style={{ marginTop: 6 }} disabled={ed.busy} onClick={onCutout}>✨ Détourer automatiquement (IA)</button>
+          <div className="pr">
+            <button className="pb" onClick={() => ed.setTool('wand')}>🪄 Baguette</button>
+            <button className="pb" onClick={() => ed.setTool('eraser')}>🧽 Gomme</button>
           </div>
         </>
       )}

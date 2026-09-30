@@ -81,3 +81,12 @@
 .spot-ring{position:fixed;border:2px solid var(--gold);border-radius:10px;box-shadow:0 0 0 9999px rgba(12,40,48,.28);z-index:59;pointer-events:none;transition:all .25s}
 
 @media(max-width:900px){.ed-body{grid-template-columns:64px 1fr}.panel{display:none}.rail>button{width:54px}.ed-top .hide-sm{display:none}}
+
+/* --- fonds --- */
+.bgpick{width:340px;padding:10px}
+.bgtabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.bggrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:8px;max-height:min(52vh,420px);overflow:auto;padding:2px}
+.bgthumb{border:2px solid transparent;border-radius:8px;padding:0;background:none;cursor:pointer;overflow:hidden;line-height:0;box-shadow:0 0 0 1px var(--line)}
+.bgthumb img{width:100%;height:auto;display:block}
+.bgthumb:hover{border-color:var(--gold2)}
+.bgthumb.on{border-color:var(--gold);box-shadow:0 0 0 2px var(--gold)}
