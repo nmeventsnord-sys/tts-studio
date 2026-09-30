@@ -7,6 +7,7 @@ import Parcours from './screens/Parcours'
 import Soon from './screens/Soon'
 import Galerie from './screens/Galerie'
 import Formats from './screens/Formats'
+import Editor from './screens/Editor'
 
 /** Toutes les pages du Studio demandent une identité (compte ou invité). */
 function RequireIdentity({ children }: { children: ReactNode }) {
@@ -27,7 +28,7 @@ export default function App() {
       <Route path="/" element={guard(<Parcours />)} />
       <Route path="/themes" element={guard(<Galerie />)} />
       <Route path="/formats/:themeId" element={guard(<Formats />)} />
-      <Route path="/editeur" element={guard(<Soon title="Éditeur" step="étape 4" />)} />
+      <Route path="/editeur" element={guard(<Editor />)} />
       <Route path="/projets" element={guard(<Soon title="Mes projets" step="étape 7" />)} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
