@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { api } from './api'
 import { ensureRemote, uploadBlobs } from './upload'
 import type { Identity } from './session'
 import type { DocJSON } from '../editor/engine'
@@ -228,6 +229,41 @@ class LocalStore implements ProjectStore {
     const r = rows.find((x) => x.id === id)
     if (r) { r.status = 'sent'; r.sent_at = new Date().toISOString(); this.write(rows) }
   }
+}
+
+// ───────────── équipe Time To Smile : retouche du projet d'un client (mode master) ─────────────
+export type MasterClient = { email: string; prenom: string; nom: string }
+
+export class MasterStore implements ProjectStore {
+  readonly remote = true
+  client: MasterClient | null = null
+  constructor(private projectId: string) {}
+  private no(): never { throw new Error('Non disponible en mode Time To Smile') }
+
+  async get(id: string) {
+    const r = await api<{ project: ProjectRow; client: MasterClient }>('master', { action: 'get', id })
+    this.client = r.client
+    return r.project
+  }
+  async list() { const p = await this.get(this.projectId); return [p] }
+  async create(): Promise<ProjectRow> { return this.no() }
+  async update(id: string, since: string | null, input: SaveInput) {
+    const doc = await publishImages(input.data.doc)
+    let preview_url: string | undefined
+    if (input.thumb) {
+      const up = await uploadBlobs([{ key: id, blob: input.thumb, kind: 'thumb' }])
+      preview_url = `${up[id]}?v=${Date.now()}`
+    }
+    const r = await api<{ project?: ProjectRow; conflict?: boolean; current?: ProjectRow | null }>('master', {
+      action: 'save', id, since, name: input.name, canvas_json: { ...input.data, doc }, preview_url,
+    })
+    if (r.conflict || !r.project) throw new ConflictError(r.current ?? null)
+    return r.project
+  }
+  async rename(): Promise<ProjectRow> { return this.no() }
+  async duplicate(): Promise<ProjectRow> { return this.no() }
+  async remove(): Promise<void> { return this.no() }
+  async markSent() {}
 }
 
 export function projectStore(identity: Identity): ProjectStore {

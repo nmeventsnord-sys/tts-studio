@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Hero } from '../components/Hero'
+import { Help } from '../components/Help'
 import { FREE_FORMATS, defText, readInfo, saveInfo, themeFormats, type EventInfo, type FreeFormatKey } from '../data/formats'
 import { fontStack, loadFonts } from '../lib/fonts'
 import { getTheme, type Theme, type ThemeFormat } from '../lib/themes'
@@ -97,6 +98,7 @@ export default function Formats() {
           </div>
         )}
       </div>
+      <Help />
     </section>
   )
 }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { IText } from 'fabric'
 import type { StudioEditor } from './engine'
 import type { Identity } from '../lib/session'
-import { ConflictError, LimitError, MAX_PROJECTS, projectStore, type ProjectMeta, type ProjectRow } from '../lib/projects'
+import { ConflictError, LimitError, MAX_PROJECTS, MasterStore, projectStore, type ProjectMeta, type ProjectRow, type ProjectStore } from '../lib/projects'
 
 export type ProjectModal =
   | { kind: 'name' }
@@ -45,9 +45,11 @@ export function useProject(opts: {
   defaultName: string
   initial: ProjectRow | null
   say: (html: string, ms?: number) => void
+  /** mode master : magasin imposé (projet d'un client) */
+  storeOverride?: ProjectStore | null
 }) {
-  const { ed, identity, meta, themeId, defaultName, initial, say } = opts
-  const store = useMemo(() => projectStore(identity), [identity])
+  const { ed, identity, meta, themeId, defaultName, initial, say, storeOverride } = opts
+  const store = useMemo(() => storeOverride ?? projectStore(identity), [identity, storeOverride])
   const [proj, setProj] = useState<ProjectRow | null>(initial)
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState<number | null>(initial ? Date.parse(initial.updated_at) : null)
@@ -75,8 +77,9 @@ export function useProject(opts: {
       setModal(null)
       ed.dirty = false
       ed.touch()
-      window.history.replaceState(null, '', `/editeur?projet=${row.id}`)
-      if (!o.auto) {
+      if (!(store instanceof MasterStore)) window.history.replaceState(null, '', `/editeur?projet=${row.id}`)
+      if (!o.auto && store instanceof MasterStore) say('Enregistré pour le client ✓ (badge « Modifié par Time To Smile »)')
+      else if (!o.auto) {
         const n = (await store.list()).length
         say(`Projet sauvegardé <b>(${n}/${MAX_PROJECTS})</b>${store.remote ? '' : ' sur cet appareil'}`)
       }

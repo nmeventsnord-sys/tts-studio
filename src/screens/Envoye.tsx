@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Hero } from '../components/Hero'
+import { Help } from '../components/Help'
 import { downloadPdf, type PdfInfo } from '../editor/export'
 
 export type LastSend = PdfInfo & { email: string; back: string }
@@ -45,6 +46,7 @@ export default function Envoye() {
           </p>
         </div>
       </div>
+      <Help />
     </section>
   )
 }

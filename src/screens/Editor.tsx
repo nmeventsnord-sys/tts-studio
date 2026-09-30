@@ -15,7 +15,8 @@ import { loadLibrary, type LibraryFont } from '../data/fontLibrary'
 import { loadFont, loadFonts } from '../lib/fonts'
 import { getTheme, type DefText, type FormatKey, type Theme, type ThemeFont } from '../lib/themes'
 import { useSession } from '../lib/session'
-import { convertV1, projectStore, readProject, type ProjectData, type ProjectMeta, type ProjectRow } from '../lib/projects'
+import { MasterStore, convertV1, projectStore, readProject, type ProjectData, type ProjectMeta, type ProjectRow } from '../lib/projects'
+import { Help } from '../components/Help'
 import { useProject } from '../editor/useProject'
 import { ProjectModals } from '../editor/ProjectModals'
 import { SendModal } from '../editor/SendModal'
@@ -35,7 +36,9 @@ export default function Editor() {
   const [params] = useSearchParams()
   const nav = useNavigate()
   const identity = useSession().identity!
-  const projectId = params.get('projet')
+  const masterId = params.get('master')
+  const projectId = masterId ?? params.get('projet')
+  const master = useMemo(() => (masterId && identity.kind === 'user' ? new MasterStore(masterId) : null), [masterId, identity])
 
   // Projet rouvert (?projet=) : le thème et le format viennent du projet enregistré.
   type Loaded = { row: ProjectRow; data: ProjectData | null; legacy: ReturnType<typeof readProject>['legacy'] }
@@ -43,13 +46,14 @@ export default function Editor() {
   const [reloadKey, setReloadKey] = useState(0)
   useEffect(() => {
     if (!projectId) { setLoaded(null); return }
+    if (masterId && !master) { setError('Le mode Time To Smile demande une connexion avec ton compte Zing.'); return }
     let ok = true
-    projectStore(identity).get(projectId).then(
+    ;(master ?? projectStore(identity)).get(projectId).then(
       (row) => { if (!ok) return; if (!row) { setError("Ce projet n'existe plus."); return } setLoaded({ row, ...readProject(row) }) },
       (e) => ok && setError((e as Error).message),
     )
     return () => { ok = false }
-  }, [projectId, identity, reloadKey])
+  }, [projectId, identity, reloadKey, master, masterId])
 
   const meta0 = loaded?.data?.meta
   const themeKey = loaded ? meta0?.theme ?? (loaded.row.parcours === 'libre' ? null : loaded.row.theme_id) : params.get('theme')
@@ -185,7 +189,22 @@ export default function Editor() {
   const meta = useMemo<ProjectMeta | null>(() => (spec ? {
     theme: theme?.slug ?? theme?.id, themeName: theme?.name, format: libre ?? fmtKey, libre: libre ?? undefined, info: readInfo(),
   } : null), [spec, theme, libre, fmtKey])
-  const project = useProject({ ed, identity, meta, themeId: theme?.id ?? null, defaultName, initial: loaded?.row ?? null, say })
+  const project = useProject({ ed, identity, meta, themeId: theme?.id ?? null, defaultName, initial: loaded?.row ?? null, say, storeOverride: master })
+
+  /** Mode master : PNG d'impression téléchargé directement (et automatiquement avec &export=png). */
+  const downloadPrint = useCallback(async () => {
+    if (!ed) return
+    const blob = await toBlob(renderPrint(ed), 'image/png')
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${(loaded?.row.name ?? 'template').replace(/[^\w-]+/g, '-')}.png`
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000)
+  }, [ed, loaded])
+  const autoExport = useRef(false)
+  useEffect(() => {
+    if (master && ed && params.get('export') === 'png' && !autoExport.current) { autoExport.current = true; downloadPrint() }
+  }, [master, ed, params, downloadPrint])
 
   // Avertit avant de quitter avec des changements non sauvegardés.
   useEffect(() => {
@@ -329,7 +348,6 @@ export default function Editor() {
     nav('/envoye')
   }, [ed, spec, project, libre, theme, identity, nav])
 
-  const soon = (what: string, step: number) => say(`${what} : arrive à l'<b>étape ${step}</b>`)
 
   const closeTuto = useCallback(() => {
     setTuto(false)
@@ -378,12 +396,17 @@ export default function Editor() {
     <section className="ed">
       <div className="ed-top">
         <button className="ib" onClick={back}>← Formats</button>
+        {master && <span className="mastertag" title={master.client?.email}>MODE TIME TO SMILE{master.client ? ` · ${master.client.prenom || master.client.email}` : ''}</span>}
         <div className="t"><b>{title}</b> · {spec?.title ?? ''} · <span>{project.status}</span></div>
         <button className="ib" disabled={!ed?.canUndo} onClick={() => ed?.undo()} title="Annuler (Ctrl+Z)">↶ <span className="hide-sm">Annuler</span></button>
         <button className="ib" disabled={!ed?.canRedo} onClick={() => ed?.redo()} title="Refaire (Ctrl+Y)">↷ <span className="hide-sm">Refaire</span></button>
         <button className="ib sq" onClick={() => setTuto(true)} title="Revoir le tutoriel" aria-label="Revoir le tutoriel">?</button>
         <button className="ib" disabled={!ed || project.saving} onClick={() => project.save()}>💾 <span className="hide-sm">Sauvegarder</span></button>
+        {master ? (
+          <button className="ib gold" disabled={!ed} onClick={downloadPrint}>⬇ PNG d'impression</button>
+        ) : (
         <button className="ib gold" data-tuto="send" disabled={!ed} onClick={() => { if (ed) { ed.setTool('select'); setSending(true) } }}>Envoyer <span className="hide-sm">le projet terminé</span> →</button>
+        )}
       </div>
 
       <div className="ed-body">
@@ -440,7 +463,7 @@ export default function Editor() {
               <button onClick={() => ed.zoomFit()} title="Ajuster à l'écran" aria-label="Ajuster à l'écran">⤢</button>
             </div>
           )}
-          <button className="help" onClick={() => soon("« Besoin d'aide ? »", 9)}>? Besoin d'aide</button>
+          {!master && <Help variant="stage" project={project.proj ? { id: project.proj.id, name: project.proj.name ?? undefined } : undefined} />}
         </div>
 
         {ed ? <Panel ed={ed} themeFonts={themeFonts} palette={palette} onFont={applyFont} onAddText={() => addText('body')} onCutout={cutout} /> : <aside className="panel" />}

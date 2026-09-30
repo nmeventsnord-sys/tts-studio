@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Hero } from '../components/Hero'
+import { Help } from '../components/Help'
 import { CanvaModal } from '../components/CanvaModal'
 import { useSession } from '../lib/session'
 import { MAX_PROJECTS, projectStore } from '../lib/projects'
@@ -57,6 +58,7 @@ export default function Parcours() {
         </div>
       </div>
       {canva && <CanvaModal identity={identity} onClose={() => setCanva(false)} />}
+      <Help />
     </section>
   )
 }

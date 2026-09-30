@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Hero } from '../components/Hero'
+import { Help } from '../components/Help'
 import { CATEGORIES, STYLES, fold, formatCount, loadThemes, type Theme } from '../lib/themes'
 
 /** Écran 2 : galerie des thèmes (table themes). Filtres gardés dans l'URL pour le retour arrière. */
@@ -116,6 +117,7 @@ export default function Galerie() {
           ))}
         </div>
       </div>
+      <Help />
     </section>
   )
 }

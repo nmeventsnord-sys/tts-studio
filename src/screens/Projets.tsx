@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Hero } from '../components/Hero'
+import { Help } from '../components/Help'
 import { useSession } from '../lib/session'
 import { useToast } from '../lib/toast'
 import { LimitError, MAX_PROJECTS, projectStore, type ProjectRow } from '../lib/projects'
@@ -87,6 +88,7 @@ export default function Projets() {
           </div>
         </div>
       )}
+      <Help />
     </section>
   )
 }
