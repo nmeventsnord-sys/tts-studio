@@ -27,7 +27,7 @@ export default function Envoye() {
       <div className="wrap">
         <div className="done">
           <div className="ok">🎉</div>
-          <h2>Ton template est arrivé chez Nicolas</h2>
+          <h2>Ton template est bien arrivé chez nous</h2>
           <p>
             Il est rattaché à ton dossier grâce à ton email <b>{last.email}</b>.{' '}
             {last.zones > 0
