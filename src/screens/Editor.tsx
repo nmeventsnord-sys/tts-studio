@@ -101,7 +101,7 @@ export default function Editor() {
 
   const themeFonts = useMemo<ThemeFont[]>(() => {
     // Dédoublonnage par nom (certains thèmes listent deux fois la même police).
-    const list = [...new Map((theme?.fonts ?? []).filter((f) => !/royalty|variable/i.test(f.name)).map((f) => [f.name.toLowerCase(), f])).values()]
+    const list = [...new Map((theme?.fonts ?? []).filter((f) => !/variablefont/i.test(f.name)).map((f) => [f.name.toLowerCase(), f])).values()]
     if (theme?.font_name && !list.some((f) => f.name === theme.font_name)) list.unshift(googleFont(theme.font_name))
     return list
   }, [theme])

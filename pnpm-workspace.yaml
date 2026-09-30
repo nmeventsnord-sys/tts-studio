@@ -4,3 +4,4 @@
   esbuild: true
   protobufjs: false
 
+  sharp: true

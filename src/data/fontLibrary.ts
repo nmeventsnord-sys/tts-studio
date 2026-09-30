@@ -38,10 +38,10 @@ const WEIGHT = /[\s_-]*(thin|extralight|ultralight|light|regular|book|medium|sem
 
 /**
  * Nom de famille lisible à partir d'un fichier de police (« PlayfairDisplay Regular » → « Playfair Display »),
- * ou null pour les variantes (gras, italique…) et les noms parasites (« Royalty Free », variable).
+ * ou null pour les variantes (gras, italique…) et les noms parasites (fichiers variables, licences).
  */
 export function familyName(raw: string): string | null {
-  if (/royalty|variable|license|readme/i.test(raw)) return null
+  if (/variable|license|readme/i.test(raw)) return null
   const m = raw.trim().match(WEIGHT)
   const weight = (m?.[1] ?? '').toLowerCase()
   if (m?.[2] || (weight && weight !== 'regular' && weight !== 'book')) return null
