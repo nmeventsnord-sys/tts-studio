@@ -8,6 +8,7 @@ import Galerie from './screens/Galerie'
 import Formats from './screens/Formats'
 import Editor from './screens/Editor'
 import Projets from './screens/Projets'
+import Envoye from './screens/Envoye'
 
 /** Toutes les pages du Studio demandent une identité (compte ou invité). */
 function RequireIdentity({ children }: { children: ReactNode }) {
@@ -30,6 +31,7 @@ export default function App() {
       <Route path="/formats/:themeId" element={guard(<Formats />)} />
       <Route path="/editeur" element={guard(<Editor />)} />
       <Route path="/projets" element={guard(<Projets />)} />
+      <Route path="/envoye" element={guard(<Envoye />)} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

@@ -131,3 +131,9 @@ a{color:inherit}
 .plimit b{display:block;font-size:13px}.plimit small{color:var(--muted);font-size:11px}
 .stack{display:flex;flex-direction:column;gap:8px}
 .card .badge+.badge{left:auto;right:10px}
+
+/* --- envoi --- */
+.modal.send{max-width:520px}
+.send-pv{background:repeating-conic-gradient(#ecebe7 0 25%,#f8f7f4 0 50%) 0 0/14px 14px;border-radius:12px;padding:14px;display:flex;justify-content:center;margin-bottom:14px}
+.send-pv img{max-height:46vh;max-width:100%;box-shadow:0 6px 20px rgba(0,0,0,.14);border-radius:3px}
+.done .dl:disabled{opacity:.6}

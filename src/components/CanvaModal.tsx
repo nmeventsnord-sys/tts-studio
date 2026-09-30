@@ -5,6 +5,8 @@ import type { Identity } from '../lib/session'
 /** Parcours « Partager mon Canva » : encadré PEUT MODIFIER + lien envoyé à Zing (champ lien_canva). */
 export function CanvaModal({ identity, onClose }: { identity: Identity; onClose: () => void }) {
   const [lien, setLien] = useState('')
+  const [devis, setDevis] = useState('')
+  const [date, setDate] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [done, setDone] = useState(false)
@@ -13,7 +15,7 @@ export function CanvaModal({ identity, onClose }: { identity: Identity; onClose:
     e.preventDefault()
     setBusy(true); setErr('')
     try {
-      await api('send-template', { email: identity.email, prenom: identity.prenom, nom: identity.nom, lien_canva: lien.trim() })
+      await api('send-template', { email: identity.email, prenom: identity.prenom, nom: identity.nom, lien_canva: lien.trim(), devis: devis.trim(), date_event: date })
       setDone(true)
     } catch (e) {
       setErr((e as Error).message)
@@ -49,6 +51,10 @@ export function CanvaModal({ identity, onClose }: { identity: Identity; onClose:
               <label htmlFor="lien">Lien Canva</label>
               <input id="lien" type="url" required placeholder="https://www.canva.com/design/…/edit" value={lien} onChange={(e) => setLien(e.target.value)} />
               <small>Envoyé au nom de {identity.prenom} {identity.nom} · {identity.email}</small>
+            </div>
+            <div className="two">
+              <div className="field"><label htmlFor="devis">N° de devis <small>(facultatif)</small></label><input id="devis" value={devis} maxLength={40} onChange={(e) => setDevis(e.target.value)} /></div>
+              <div className="field"><label htmlFor="devt">Date de l'événement</label><input id="devt" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
             </div>
             <button className="btn" disabled={busy}>{busy ? 'Envoi…' : 'Envoyer mon lien'}</button>
           </form>

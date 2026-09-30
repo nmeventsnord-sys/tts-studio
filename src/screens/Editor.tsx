@@ -18,6 +18,11 @@ import { useSession } from '../lib/session'
 import { convertV1, projectStore, readProject, type ProjectData, type ProjectMeta, type ProjectRow } from '../lib/projects'
 import { useProject } from '../editor/useProject'
 import { ProjectModals } from '../editor/ProjectModals'
+import { SendModal } from '../editor/SendModal'
+import { renderPlan, renderPrint, toBlob } from '../editor/export'
+import { uploadBlobs } from '../lib/upload'
+import { api } from '../lib/api'
+import { LAST_SEND_KEY, type LastSend } from './Envoye'
 import '../styles/editor.css'
 
 const BASE_PALETTE = ['#1a1410', '#ffffff', '#C9A84C', '#d85a30', '#3a5a8c', '#4f6b45']
@@ -60,6 +65,7 @@ export default function Editor() {
   const fileRef = useRef<HTMLInputElement>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [tuto, setTuto] = useState(false)
+  const [sending, setSending] = useState(false)
   const [lib, setLib] = useState<LibraryFont[]>([])
   const toastTimer = useRef(0)
 
@@ -299,6 +305,30 @@ export default function Editor() {
     }
   }, [ed, say])
 
+  /** Envoi à Zing : PNG natif (trous transparents) + plan annoté, déposés dans Storage puis relayés. */
+  const sendNow = useCallback(async () => {
+    if (!ed || !spec) return
+    if (project.proj && ed.dirty) await project.save({ auto: true })
+    const [png, plan] = await Promise.all([toBlob(renderPrint(ed), 'image/png'), toBlob(renderPlan(ed), 'image/jpeg', 0.82)])
+    const kp = crypto.randomUUID()
+    const ka = crypto.randomUUID()
+    const urls = await uploadBlobs([{ key: kp, blob: png, kind: 'export' }, { key: ka, blob: plan, kind: 'export' }])
+    const template = libre ? `Création libre — ${spec.title}` : theme?.name ?? 'Template'
+    await api('send-template', {
+      email: identity.email, prenom: identity.prenom, nom: identity.nom, template, format: spec.title,
+      png_url: urls[kp], annotated_url: urls[ka],
+    })
+    if (project.proj) await project.store.markSent(project.proj.id).catch(() => {})
+    const last: LastSend = {
+      email: identity.email, prenom: identity.prenom, nom: identity.nom, template, format: spec.title, zones: ed.zones.length,
+      planDataUrl: renderPlan(ed, 1400).toDataURL('image/jpeg', 0.85),
+      back: project.proj ? `/editeur?projet=${project.proj.id}` : location.pathname + location.search,
+    }
+    sessionStorage.setItem(LAST_SEND_KEY, JSON.stringify(last))
+    ed.dirty = false
+    nav('/envoye')
+  }, [ed, spec, project, libre, theme, identity, nav])
+
   const soon = (what: string, step: number) => say(`${what} : arrive à l'<b>étape ${step}</b>`)
 
   const closeTuto = useCallback(() => {
@@ -353,7 +383,7 @@ export default function Editor() {
         <button className="ib" disabled={!ed?.canRedo} onClick={() => ed?.redo()} title="Refaire (Ctrl+Y)">↷ <span className="hide-sm">Refaire</span></button>
         <button className="ib sq" onClick={() => setTuto(true)} title="Revoir le tutoriel" aria-label="Revoir le tutoriel">?</button>
         <button className="ib" disabled={!ed || project.saving} onClick={() => project.save()}>💾 <span className="hide-sm">Sauvegarder</span></button>
-        <button className="ib gold" data-tuto="send" onClick={() => soon("L'envoi du projet", 8)}>Envoyer <span className="hide-sm">le projet terminé</span> →</button>
+        <button className="ib gold" data-tuto="send" disabled={!ed} onClick={() => { if (ed) { ed.setTool('select'); setSending(true) } }}>Envoyer <span className="hide-sm">le projet terminé</span> →</button>
       </div>
 
       <div className="ed-body">
@@ -416,6 +446,9 @@ export default function Editor() {
         {ed ? <Panel ed={ed} themeFonts={themeFonts} palette={palette} onFont={applyFont} onAddText={() => addText('body')} onCutout={cutout} /> : <aside className="panel" />}
       </div>
       {tuto && ed && <Tutorial steps={tutoSteps} onClose={closeTuto} />}
+      {sending && ed && (
+        <SendModal ed={ed} identity={identity} hasThemeHoles={!!spec?.src} onCancel={() => setSending(false)} onConfirm={sendNow} />
+      )}
       {project.modal && (
         <ProjectModals
           key={project.modal.kind}
