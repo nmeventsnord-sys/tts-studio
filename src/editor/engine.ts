@@ -6,6 +6,7 @@ import {
   IText,
   InteractiveFabricObject,
   Point,
+  Rect,
   util,
   type TMat2D,
 } from 'fabric'
@@ -37,7 +38,7 @@ Object.assign(InteractiveFabricObject.ownDefaults, {
 })
 
 export type Role = 'names' | 'date' | 'text' | 'image' | 'zone' | 'digit'
-export type EditorObject = FabricObject & { uid?: string; role?: Role; zone?: number; locked?: boolean }
+export type EditorObject = FabricObject & { uid?: string; role?: Role; zone?: number; locked?: boolean; srcKey?: string }
 export type TextObject = IText & { uid?: string; role?: Role }
 
 export type DocBackground = { kind: 'theme'; src: string } | { kind: 'color'; color: string } | { kind: 'generated'; id: string; src?: string }
@@ -57,6 +58,28 @@ const HISTORY_MAX = 60
 const PAD = 28 // marge autour de la page à l'écran (px)
 export const MIN_ZOOM = 1 // 100 % = page entière visible (zoom limité au canvas)
 export const MAX_ZOOM = 4
+export const ZONE_MAX = 4
+
+/** Icône + numéro au centre d'une prise de vue (repère local de l'objet). */
+function drawZoneLabel(ctx: CanvasRenderingContext2D, z: FabricObject & { zone?: number }) {
+  const sx = z.scaleX ?? 1
+  const sy = z.scaleY ?? 1
+  const size = Math.max(18, Math.min((z.width ?? 0) * sx, (z.height ?? 0) * sy) * 0.28)
+  ctx.save()
+  ctx.scale(1 / sx, 1 / sy)
+  ctx.fillStyle = '#fff'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.shadowColor = 'rgba(0,0,0,.25)'
+  ctx.shadowBlur = size * 0.15
+  ctx.font = `600 ${size}px Poppins, sans-serif`
+  ctx.fillText(String(z.zone ?? ''), size * 0.32, 0)
+  ctx.font = `${size * 0.62}px sans-serif`
+  ctx.fillText('📷', -size * 0.42, 0)
+  ctx.restore()
+}
+const ZONE_FILL = 'rgba(216,50,50,.32)'
+const ZONE_STROKE = '#d83232'
 const uid = () => Math.random().toString(36).slice(2, 10)
 
 export class StudioEditor {
@@ -79,6 +102,8 @@ export class StudioEditor {
   private ro: ResizeObserver
   private panning: { x: number; y: number } | null = null
   private spaceDown = false
+  private loading = false
+  private clip: EditorObject | null = null
   dirty = false
 
   constructor(el: HTMLCanvasElement, host: HTMLElement, opts: { w: number; h: number; bookmark?: boolean }) {
@@ -245,6 +270,7 @@ export class StudioEditor {
   async duplicate() {
     const o = this.active
     if (!o) return
+    if (o.role === 'zone') { this.addZone(o); return }
     const c = (await o.clone(FabricObject.customProperties)) as EditorObject
     c.uid = uid()
     c.set({ left: (o.left ?? 0) + 24, top: (o.top ?? 0) + 24 })
@@ -266,6 +292,120 @@ export class StudioEditor {
     sel.forEach((o) => this.canvas.remove(o))
     this.canvas.requestRenderAll()
     this.record()
+  }
+
+// ───────────── images ─────────────
+  /** Ajoute une image (déjà enregistrée dans assets.ts sous srcKey), centrée et à taille raisonnable. */
+  async addImage(url: string, srcKey: string, role: Role = 'image') {
+    const img = (await FabricImage.fromURL(url, { crossOrigin: 'anonymous' })) as FabricImage & EditorObject
+    const a = this.area
+    const k = Math.min(((a.right - a.left) * (this.bookmark ? 0.8 : 0.45)) / img.width, ((a.bottom - a.top) * 0.45) / img.height, 1.5)
+    img.set({ left: (a.left + a.right) / 2, top: (a.top + a.bottom) / 2, scaleX: k, scaleY: k })
+    img.srcKey = srcKey
+    img.role = role
+    this.add(img)
+    this.record(true)
+    return img
+  }
+
+  /** Remplace le contenu d'une image (gomme, baguette, détourage) en gardant position et taille. */
+  async replaceImage(o: FabricImage & EditorObject, url: string, srcKey: string) {
+    await o.setSrc(url, { crossOrigin: 'anonymous' })
+    o.srcKey = srcKey
+    this.canvas.requestRenderAll()
+    this.record(true)
+    this.emit()
+  }
+
+  // ───────────── copier / coller ─────────────
+  async copy(cut = false) {
+    const o = this.active
+    if (!o || (o as IText).isEditing) return false
+    this.clip = (await o.clone(FabricObject.customProperties)) as EditorObject
+    if (cut) this.remove()
+    return true
+  }
+
+  async paste() {
+    if (!this.clip) return false
+    if (this.clip.role === 'zone') { this.addZone(this.clip); return true }
+    const c = (await this.clip.clone(FabricObject.customProperties)) as EditorObject
+    this.clip.set({ left: (this.clip.left ?? 0) + 24, top: (this.clip.top ?? 0) + 24 })
+    c.uid = uid()
+    if (c instanceof ActiveSelection) {
+      c.canvas = this.canvas
+      c.forEachObject((x) => { (x as EditorObject).uid = uid(); if ((x as EditorObject).role !== 'zone') this.canvas.add(x) })
+      c.setCoords()
+      this.canvas.setActiveObject(c)
+    } else this.add(c)
+    this.record(true)
+    return true
+  }
+
+  // ───────────── zones photo (prises de vue) ─────────────
+  get zones() {
+    return this.objects.filter((o) => o.role === 'zone').sort((a, b) => (a.zone ?? 0) - (b.zone ?? 0)) as (Rect & EditorObject)[]
+  }
+
+  /**
+   * Ajoute une prise de vue numérotée (4 max). La zone 1 se dimensionne librement ;
+   * les suivantes prennent ses proportions et ne se redimensionnent que par les coins.
+   */
+  addZone(near?: FabricObject): number | null {
+    const zs = this.zones
+    if (zs.length >= ZONE_MAX) return null
+    const a = this.area
+    const aw = a.right - a.left
+    const ah = a.bottom - a.top
+    const first = zs[0]
+    let w = aw * 0.6
+    let h = (w * 2) / 3
+    if (first) { w = first.width; h = first.height }
+    else if (h > ah * 0.4) { h = ah * 0.4; w = h * 1.5 }
+    const n = zs.length
+    const r = new Rect({
+      width: w, height: h,
+      left: near ? (near.left ?? 0) + 30 : (a.left + a.right) / 2 + n * aw * 0.03,
+      top: near ? (near.top ?? 0) + 30 : a.top + ah * 0.3 + n * ah * 0.06,
+      fill: ZONE_FILL, stroke: ZONE_STROKE, strokeWidth: 4, strokeUniform: true, rx: 6, ry: 6,
+    }) as Rect & EditorObject
+    r.role = 'zone'
+    r.zone = n + 1
+    this.styleZone(r)
+    this.add(r)
+    this.record(true)
+    return r.zone
+  }
+
+  private styleZone(r: EditorObject) {
+    // Le numéro est dessiné avec la zone : il respecte l'ordre des calques et la copie du marque-page.
+    const z = r as Rect & EditorObject & { _render: (ctx: CanvasRenderingContext2D) => void }
+    z._render = function (ctx: CanvasRenderingContext2D) {
+      Rect.prototype._render.call(this, ctx)
+      drawZoneLabel(ctx, this)
+    }
+    const free = r.zone === 1
+    r.setControlsVisibility({ mt: free, mb: free, ml: free, mr: free })
+    r.set({ lockScalingFlip: true, lockSkewingX: true, lockSkewingY: true, fill: ZONE_FILL, stroke: ZONE_STROKE })
+  }
+
+  /** Renumérote 1…n (après suppression) puis réaligne les proportions sur la zone 1. */
+  renumberZones() {
+    this.zones.forEach((z, i) => { z.zone = i + 1; this.styleZone(z); z.dirty = true })
+    this.propagateRatio()
+    this.canvas.requestRenderAll()
+  }
+
+  /** Les zones 2 à 4 suivent les proportions de la zone 1 (largeur conservée). */
+  private propagateRatio() {
+    const [first, ...rest] = this.zones
+    if (!first) return
+    const ratio = first.width / first.height
+    for (const z of rest) {
+      z.set({ height: z.width / ratio })
+      z.setCoords()
+      this.keepInside(z)
+    }
   }
 
   forward() { const o = this.active; if (o) { this.canvas.bringObjectForward(o); this.afterReorder() } }
@@ -368,10 +508,12 @@ export class StudioEditor {
   async loadJSON(doc: DocJSON, withBackground = true) {
     const c = this.canvas
     const activeUid = this.active?.uid
+    this.loading = true
     c.discardActiveObject()
     c.remove(...c.getObjects())
     const objs = (await util.enlivenObjects(doc.objects)) as EditorObject[]
-    objs.forEach((o) => c.add(o))
+    objs.forEach((o) => { if (o.role === 'zone') this.styleZone(o); c.add(o) })
+    this.loading = false
     if (withBackground && doc.background) {
       const bg = doc.background
       if (bg.kind === 'color') this.setBackgroundColor(bg.color)
@@ -431,7 +573,12 @@ export class StudioEditor {
     })
 
     c.on('object:moving', (e) => this.snap(e.target))
-    c.on('object:scaling', (e) => this.keepInside(e.target))
+    c.on('object:scaling', (e) => {
+      const z = e.target as EditorObject
+      // zones 2 à 4 : proportions verrouillées, même avec Maj
+      if (z.role === 'zone' && (z.zone ?? 1) > 1) z.set({ scaleY: z.scaleX })
+      this.keepInside(z)
+    })
     c.on('object:rotating', (e) => this.keepInside(e.target))
     c.on('object:modified', (e) => {
       this.guides = []
@@ -441,6 +588,12 @@ export class StudioEditor {
       if (t instanceof IText && (t.scaleX !== 1 || t.scaleY !== 1)) {
         t.set({ fontSize: Math.round((t.fontSize ?? 12) * (t.scaleY ?? 1) * 10) / 10, scaleX: 1, scaleY: 1 })
         t.setCoords()
+      }
+      const z = e.target as EditorObject
+      if (z.role === 'zone' && (z.scaleX !== 1 || z.scaleY !== 1)) {
+        z.set({ width: (z.width ?? 0) * (z.scaleX ?? 1), height: (z.height ?? 0) * (z.scaleY ?? 1), scaleX: 1, scaleY: 1 })
+        z.setCoords()
+        if (z.zone === 1) this.propagateRatio()
       }
       this.keepInside(e.target)
       c.requestRenderAll()
@@ -455,7 +608,10 @@ export class StudioEditor {
       this.record()
     })
     c.on('object:added', () => this.emit())
-    c.on('object:removed', () => this.emit())
+    c.on('object:removed', (e) => {
+      if ((e.target as EditorObject).role === 'zone' && !this.loading && !this.restoring) this.renumberZones()
+      this.emit()
+    })
     c.on('selection:created', () => this.emit())
     c.on('selection:updated', () => this.emit())
     c.on('selection:cleared', () => this.emit())
@@ -504,6 +660,8 @@ export class StudioEditor {
     if (e.code === 'Space' && !this.spaceDown) { this.spaceDown = true; this.canvas.defaultCursor = 'grab'; e.preventDefault(); return }
     if (mod && k === 'z') { e.preventDefault(); if (e.shiftKey) this.redo(); else this.undo(); return }
     if (mod && k === 'y') { e.preventDefault(); this.redo(); return }
+    if (mod && k === 'c') { this.copy(); return }
+    if (mod && k === 'x') { e.preventDefault(); this.copy(true); return }
     if (mod && k === 'd') { e.preventDefault(); this.duplicate(); return }
     if (mod && (k === '+' || k === '=')) { e.preventDefault(); this.zoomBy(1); return }
     if (mod && k === '-') { e.preventDefault(); this.zoomBy(-1); return }

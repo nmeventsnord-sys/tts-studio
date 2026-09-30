@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { IText } from 'fabric'
+import { FabricImage, IText } from 'fabric'
 import type { StudioEditor } from './engine'
 import type { ThemeFont } from '../lib/themes'
 import { FONT_CATS, loadLibrary, type FontCat, type LibraryFont } from '../data/fontLibrary'
@@ -56,6 +56,28 @@ export function Panel({ ed, themeFonts, palette, onFont, onAddText }: Props) {
     )
   }
 
+  if (o.role === 'zone') {
+    const first = o.zone === 1
+    return (
+      <aside className="panel">
+        <h5>PRISE DE VUE {o.zone}</h5>
+        <p className="hint">
+          La borne placera ici la photo n°{o.zone}. {first
+            ? 'Dimensionne cette zone librement : les suivantes reprendront automatiquement ses proportions.'
+            : 'Ses proportions suivent la zone 1 : redimensionne-la par les coins.'}
+        </p>
+        <h5>ORDRE</h5>
+        <div className="pr">
+          <button className="pb" onClick={() => ed.centerH()}>↔ Centrer</button>
+          <button className="pb" onClick={() => ed.duplicate()}>⧉ Dupliquer</button>
+          <button className="pb" onClick={() => ed.remove()}>🗑 Supprimer</button>
+        </div>
+        <p className="hint" style={{ marginTop: 14 }}>À l'envoi, chaque zone devient un trou transparent dans le PNG et reste numérotée sur ton PDF.</p>
+      </aside>
+    )
+  }
+
+  const isImage = o instanceof FabricImage
   const color = String(o.fill ?? '#000')
   const opacity = Math.round((o.opacity ?? 1) * 100)
   const fontRow = (f: ThemeFont, tag?: boolean) => (
@@ -86,8 +108,21 @@ export function Panel({ ed, themeFonts, palette, onFont, onAddText }: Props) {
         </>
       )}
 
-      <h5>COULEUR</h5>
-      <ColorRow value={color} palette={palette} onChange={(c) => ed.update(o, { fill: c })} />
+      {!isImage && (
+        <>
+          <h5>COULEUR</h5>
+          <ColorRow value={color} palette={palette} onChange={(c) => ed.update(o, { fill: c })} />
+        </>
+      )}
+      {isImage && (
+        <>
+          <h5>IMAGE</h5>
+          <div className="pr">
+            <button className="pb" onClick={() => ed.update(o, { flipX: !o.flipX })}>⇋ Retourner</button>
+            <button className="pb" onClick={() => ed.update(o, { angle: 0 })}>⟲ Redresser</button>
+          </div>
+        </>
+      )}
 
       <h5>OPACITÉ</h5>
       <input className="range" type="range" min={10} max={100} value={opacity} aria-label="Opacité"

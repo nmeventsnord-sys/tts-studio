@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { IText } from 'fabric'
-import { StudioEditor } from '../editor/engine'
+import { StudioEditor, ZONE_MAX } from '../editor/engine'
+import { putAsset } from '../editor/assets'
 import { ContextBar } from '../editor/ContextBar'
 import { Panel } from '../editor/Panel'
 import { Tutorial, type TutoStep } from '../editor/Tutorial'
@@ -29,7 +30,8 @@ export default function Editor() {
   const [ed, setEd] = useState<StudioEditor | null>(null)
   const [, rerender] = useReducer((x: number) => x + 1, 0)
   const [error, setError] = useState('')
-  const [fly, setFly] = useState<'text' | null>(null)
+  const [fly, setFly] = useState<'text' | 'image' | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [tuto, setTuto] = useState(false)
   const [lib, setLib] = useState<LibraryFont[]>([])
@@ -158,6 +160,47 @@ export default function Editor() {
     ed.record(true)
   }, [ed, themeFonts, palette])
 
+  /** Import d'images (bouton, collage, glisser-déposer) : stockées hors du projet, voir assets.ts. */
+  const importFiles = useCallback(async (files: File[]) => {
+    if (!ed) return
+    const imgs = files.filter((f) => f.type.startsWith('image/'))
+    if (!imgs.length) { say("Ce fichier n'est pas une image (JPG, PNG, WEBP, SVG…)"); return }
+    setFly(null)
+    for (const f of imgs) {
+      try {
+        const { key, url } = await putAsset(f)
+        await ed.addImage(url, key)
+      } catch (err) {
+        console.error(err)
+        say(`Impossible d'ajouter <b>${f.name.replace(/</g, '')}</b>`)
+      }
+    }
+    if (imgs.length) say('Image ajoutée · déplace-la, redimensionne-la par les coins')
+  }, [ed, say])
+
+  // Ctrl+V : image du presse-papiers, sinon l'objet copié dans l'éditeur.
+  useEffect(() => {
+    if (!ed) return
+    const onPaste = (e: ClipboardEvent) => {
+      const el = e.target as HTMLElement
+      if (/^(INPUT|TEXTAREA)$/.test(el?.tagName ?? '') || el?.isContentEditable || (ed.active as IText | undefined)?.isEditing) return
+      const files = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith('image/'))
+      e.preventDefault()
+      if (files.length) importFiles(files)
+      else ed.paste()
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [ed, importFiles])
+
+  const addZone = useCallback(() => {
+    if (!ed) return
+    const n = ed.addZone()
+    if (n === null) say(`${ZONE_MAX} prises de vue maximum`)
+    else if (n === 1) say('Zone 1 : dimensionne-la librement. Les suivantes garderont <b>la même proportion</b>.')
+    else say(`Zone ${n} ajoutée · proportions verrouillées`)
+  }, [ed, say])
+
   const soon = (what: string, step: number) => say(`${what} : arrive à l'<b>étape ${step}</b>`)
 
   const closeTuto = useCallback(() => {
@@ -226,15 +269,28 @@ export default function Editor() {
               <button onClick={() => addText('body')} style={{ fontSize: 12 }}>Ajouter du texte</button>
             </div>
           )}
-          <button onClick={() => soon("L'import d'images", 5)}><span>🖼</span>Images<div className="tip">Importer une image ou un logo</div></button>
-          <button data-tuto="zone" onClick={() => soon('Les prises de vue', 5)}><span>📷</span>Prise de vue<div className="tip">Ajouter une prise de vue</div></button>
+          <button className={fly === 'image' ? 'on' : ''} onClick={() => setFly(fly === 'image' ? null : 'image')}><span>🖼</span>Images<div className="tip">Importer une image ou un logo</div></button>
+          {fly === 'image' && (
+            <div className="flyout" style={{ top: 72 }}>
+              <button onClick={() => fileRef.current?.click()}>📁 Importer une image ou un logo</button>
+              <p className="hint" style={{ padding: '4px 12px 8px', fontSize: 11, color: 'var(--muted)', lineHeight: 1.5 }}>Astuce : colle une image (Ctrl+V) ou glisse-la directement sur la page.</p>
+            </div>
+          )}
+          <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { importFiles([...(e.target.files ?? [])]); e.target.value = '' }} />
+          <button data-tuto="zone" onClick={addZone}><span>📷</span>Prise de vue<div className="tip">Ajouter une prise de vue</div></button>
           <button data-tuto="bg" onClick={() => soon('Les fonds', 6)}><span>🎨</span>Fonds<div className="tip">Changer le fond</div></button>
           <button onClick={() => soon('La main magique', 6)}><span>✋</span>Main<div className="tip">Déplacer un élément du design</div></button>
           <button onClick={() => soon('La baguette magique', 6)}><span>🪄</span>Baguette<div className="tip">Détourer par clic</div></button>
           <button onClick={() => soon('La gomme', 6)}><span>🧽</span>Gomme<div className="tip">Effacer une zone</div></button>
         </nav>
 
-        <div className="stage" ref={hostRef} onMouseDown={() => fly && setFly(null)}>
+        <div
+          className="stage"
+          ref={hostRef}
+          onMouseDown={() => fly && setFly(null)}
+          onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) e.preventDefault() }}
+          onDrop={(e) => { e.preventDefault(); importFiles([...e.dataTransfer.files]) }}
+        >
           {!ed && <div className="ed-loading">{error ? <div className="err" style={{ maxWidth: 420 }}>{error}</div> : <><div className="spinner" style={{ margin: 0 }} />Préparation du template…</>}</div>}
           {toast && <div className="stoast" dangerouslySetInnerHTML={{ __html: toast }} />}
           {ed && <ContextBar ed={ed} fonts={allFonts} palette={palette} onFont={applyFont} />}
