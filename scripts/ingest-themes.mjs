@@ -12,7 +12,8 @@
  *   --no-ai          pas d'analyse IA : garde les textes par défaut déjà en base (ou des valeurs neutres)
  *   --reanalyze      ignore le cache IA local (scripts/.ingest-cache.json)
  *   --keep-def       garde les textes par défaut (def) déjà en base quand ils existent
- *   --apercu         planche de contrôle par thème (textes posés sur les vrais PNG) dans scripts/.ingest-apercu/
+ *   --apercu         planches de contrôle (scripts/.ingest-apercu/) et page /apercu?local=1 du Studio ;
+ *                    avec --dry-run, les fichiers vont dans le dossier « apercu/ » du bucket (thèmes en ligne intacts)
  *
  * Variables (.env.local) : TEMPLATES_PATH, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, ANTHROPIC_API_KEY,
  * ANTHROPIC_WORKSPACE_ID (si la clé n'est pas rattachée à un workspace).
@@ -54,7 +55,7 @@ const LIMIT = Number(opt('limit') ?? Infinity)
 const ROOT = process.env.TEMPLATES_PATH?.trim()
 const BUCKET = 'template'
 const MODEL = 'claude-opus-5-5'
-const PROMPT_VERSION = 'v2-trous'
+const PROMPT_VERSION = 'v3-exemple'
 const CACHE_FILE = path.join(HERE, '.ingest-cache.json')
 
 if (!ROOT || !fs.existsSync(ROOT)) fail(`TEMPLATES_PATH introuvable : « ${ROOT ?? ''} » (dossier local attendu, voir .env.example)`)
@@ -250,75 +251,93 @@ const neutralDef = (key) => {
   const land = key.startsWith('land')
   const book = key.startsWith('s')
   return [
-    { t: 'Sophie & Marc', x: book ? 0.25 : land ? 0.5 : 0.5, y: book ? 0.86 : 0.86, sz: book ? 56 : 80, c: '#1a1410', b: true },
-    { t: '14 juin 2025', x: book ? 0.25 : 0.5, y: book ? 0.92 : 0.93, sz: book ? 36 : 48, c: '#C9A84C', b: false },
+    { t: 'Sophie & Marc', r: 'names', x: book ? 0.25 : land ? 0.5 : 0.5, y: book ? 0.86 : 0.86, sz: book ? 56 : 80, c: '#1a1410', b: true },
+    { t: '14 juin 2025', r: 'date', x: book ? 0.25 : 0.5, y: book ? 0.92 : 0.93, sz: book ? 36 : 48, c: '#C9A84C', b: false },
   ]
 }
 
 // ───────────── analyse IA (vision) ─────────────
-const TEXT_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['x', 'y', 'size', 'color', 'bold'],
-  properties: {
-    x: { type: 'number', description: 'centre horizontal, fraction 0-1 de la largeur' },
-    y: { type: 'number', description: 'centre vertical, fraction 0-1 de la hauteur' },
-    size: { type: 'number', description: 'taille de police en pixels du fichier natif' },
-    color: { type: 'string', description: 'couleur hexadécimale #rrggbb' },
-    bold: { type: 'boolean' },
-  },
-}
-const AI_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['style', 'formats'],
-  properties: {
-    style: { type: 'string', enum: STYLES },
-    formats: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['key', 'names', 'date'],
-        properties: { key: { type: 'string' }, names: TEXT_SCHEMA, date: TEXT_SCHEMA },
+/** Schéma de réponse : pour chaque format, TOUS les textes de l'exemple, avec leur police parmi celles du thème. */
+function aiSchema(fontNames) {
+  const text = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['role', 'text', 'x', 'y', 'size', 'color', 'bold', 'italic', 'letter_spacing', 'font'],
+    properties: {
+      role: { type: 'string', enum: ['names', 'date', 'other'], description: 'names = prénoms / nom du héros de la fête ; date = date ; other = tout autre texte' },
+      text: { type: 'string', description: 'texte tel qu’il apparaît sur l’exemple (même casse)' },
+      x: { type: 'number', description: 'centre horizontal, fraction 0-1 de la largeur du fichier' },
+      y: { type: 'number', description: 'centre vertical, fraction 0-1 de la hauteur du fichier' },
+      size: { type: 'number', description: 'taille de police (hauteur des capitales + jambages) en pixels du fichier natif' },
+      color: { type: 'string', description: 'couleur hexadécimale #rrggbb' },
+      bold: { type: 'boolean' },
+      italic: { type: 'boolean' },
+      letter_spacing: { type: 'number', description: 'espacement des lettres en millièmes d’em (0 = normal, 200 = très espacé)' },
+      font: fontNames.length ? { type: 'string', enum: fontNames } : { type: 'string' },
+    },
+  }
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: ['style', 'formats'],
+    properties: {
+      style: { type: 'string', enum: STYLES },
+      formats: {
+        type: 'array',
+        items: { type: 'object', additionalProperties: false, required: ['key', 'texts'], properties: { key: { type: 'string' }, texts: { type: 'array', items: text } } },
       },
     },
-  },
+  }
 }
 
-const SYSTEM = `Tu analyses des templates de photobooth (PNG d'impression). Les zones à damier gris sont des trous transparents où la borne place les photos : aucun texte ne doit les chevaucher.
-Pour chaque format fourni, indique où placer deux textes personnalisables : les prénoms (texte principal, ex. « Sophie & Marc ») et la date (texte secondaire, plus petit, ex. « 14 juin 2025 »).
-- Place-les dans l'espace libre prévu pour le texte (bandeau, cartouche, zone vide sous/à côté des photos), jamais sur un trou ni sur un élément graphique important. Si le design contient déjà un emplacement ou un texte d'exemple pour les prénoms, reprends sa position.
-- x, y = centre du texte en fraction de la largeur/hauteur de l'image ENTIÈRE. Pour un marque-page double (deux bandes identiques côte à côte), donne la position sur la bande de GAUCHE (x < 0.5).
-- size = hauteur de police en pixels du fichier natif (dimensions indiquées). Les prénoms doivent tenir dans l'espace libre (environ 11 caractères) ; la date est environ 55 à 65 % des prénoms.
-- color = couleur lisible sur le fond à cet endroit, dans la palette du design.
+const SYSTEM = `Tu prépares des templates de photobooth pour un éditeur en ligne. Pour chaque thème tu reçois :
+1. l'IMAGE D'EXEMPLE du vendeur : quelques formats du thème remplis avec des photos et des textes d'exemple, souvent avec un bandeau publicitaire et un logo « TemplatesBooth » ;
+2. les PNG d'impression de chaque format, où les textes ne sont PAS encore posés. Les zones à damier gris sont des trous transparents : la borne y place les photos.
+
+Pour chaque format, recrée les textes de l'exemple pour qu'on obtienne exactement le même rendu que sur l'image d'exemple :
+- reprends chaque texte qui fait partie du design (ex. « Wedding of », « Linda & William », « 16.04.2020 », « Golden », « Champagne Party », « 2035 », « Merry Christmas », « #yourhashtag »), avec le même contenu et la même casse ;
+- N'INCLUS JAMAIS : « TemplatesBooth », « templatesbooth.com », le bandeau publicitaire (« … PHOTOBOOTH TEMPLATES ») ni le logo. Ce ne sont pas des textes du design ;
+- role : names = les prénoms (ou le prénom/nom fêté), date = la date ; un seul texte names et un seul texte date par format au maximum ; tout le reste = other ;
+- font : la police de la liste qui correspond à ce texte sur l'exemple (script, serif, sans-serif…). Les polices citées par la documentation du vendeur sont celles du design ;
+- position et taille : celles de l'exemple, transposées sur le PNG du format. Pour un format absent de l'exemple, déduis une mise en page cohérente avec les formats montrés. Aucun texte ne doit recouvrir une zone photo, ni sortir du fichier ;
+- marque-page double (deux bandes identiques côte à côte) : donne les textes de la bande de GAUCHE seulement (x < 0.5) ;
+- x, y = centre du texte en fraction du fichier entier ; size en pixels du fichier natif (dimensions indiquées) ;
 - style = l'ambiance générale du thème parmi la liste.`
 
-async function analyze(theme, formats) {
-  // la clé change avec les images ET avec la consigne (PROMPT_VERSION)
-  const key = sha(Buffer.concat([Buffer.from(PROMPT_VERSION), ...formats.map((f) => Buffer.from(f.hash))]))
+const checker = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="#e4e4e4"/><rect width="8" height="8" fill="#bdbdbd"/><rect x="8" y="8" width="8" height="8" fill="#bdbdbd"/></svg>')
+
+async function analyze(theme, formats, exampleBuf, fonts) {
+  const fontNames = [...new Set(fonts.map((f) => f.name))]
+  // la clé change avec les images, l'exemple, les polices ET la consigne (PROMPT_VERSION)
+  const key = sha(Buffer.concat([Buffer.from(PROMPT_VERSION + fontNames.join('|')), ...(exampleBuf ? [Buffer.from(sha(exampleBuf))] : []), ...formats.map((f) => Buffer.from(f.hash))]))
   if (!REANALYZE && cache[key]) return cache[key]
+
   const content = []
+  if (exampleBuf) {
+    const ex = await sharp(exampleBuf).resize({ width: 1200, withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer()
+    content.push({ type: 'text', text: 'IMAGE D’EXEMPLE du vendeur (référence pour les textes, polices, couleurs et positions) :' })
+    content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: ex.toString('base64') } })
+  }
+  content.push({ type: 'text', text: `Polices disponibles pour ce thème : ${fontNames.length ? fontNames.map((n) => `« ${n} » (${guessFontCategory(n) === 'mariage' ? 'script' : guessFontCategory(n) === 'elegantes' ? 'serif / élégante' : 'autre'})`).join(', ') : 'aucune (utilise un nom de police Google Fonts proche)'}.` })
   for (const f of formats) {
-    // aperçu réduit sur damier (les trous restent visibles), économe en jetons
-    const tile = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="#e4e4e4"/><rect width="8" height="8" fill="#bdbdbd"/><rect x="8" y="8" width="8" height="8" fill="#bdbdbd"/></svg>`)
     const small = await sharp(f.buf).resize({ width: f.width >= f.height ? 900 : 600 }).png().toBuffer()
     const meta = await sharp(small).metadata()
     const bg = await sharp({ create: { width: meta.width, height: meta.height, channels: 3, background: '#e4e4e4' } })
-      .composite([{ input: tile, tile: true }, { input: small }]).jpeg({ quality: 82 }).toBuffer()
+      .composite([{ input: checker, tile: true }, { input: small }]).jpeg({ quality: 82 }).toBuffer()
     const holesTxt = f.boxes.map((b) => `[${b.map((v) => v.toFixed(2)).join(', ')}]`).join(' ')
-    content.push({ type: 'text', text: `Format « ${f.key} » (${FORMAT_META[f.key].lbl}) — fichier natif ${f.width} × ${f.height} px${f.key.startsWith('s') ? ' — marque-page double' : ''}. Photos (trous, fractions x0, y0, x1, y1) : ${holesTxt}` })
+    content.push({ type: 'text', text: `Format « ${f.key} » (${FORMAT_META[f.key].lbl}) — fichier natif ${f.width} × ${f.height} px${f.key.startsWith('s') ? ' — marque-page double' : ''}. Zones photo (x0, y0, x1, y1) : ${holesTxt}` })
     content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: bg.toString('base64') } })
   }
   content.push({ type: 'text', text: `Thème : « ${theme} ». Réponds pour chacun des formats : ${formats.map((f) => f.key).join(', ')}.` })
 
+  const schema = aiSchema(fontNames)
   const ask = async (messages) => {
     const res = await anthropic.beta.messages.create({
       model: MODEL,
       max_tokens: 16000,
       betas: ['server-side-fallback-2026-07-01'],
       fallbacks: 'default',
-      output_config: { effort: 'medium', format: { type: 'json_schema', schema: AI_SCHEMA } },
+      output_config: { effort: 'medium', format: { type: 'json_schema', schema } },
       system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages,
     })
@@ -330,53 +349,62 @@ async function analyze(theme, formats) {
   const messages = [{ role: 'user', content }]
   let { res, out } = await ask(messages)
   // Contrôle : un texte sur une photo ou hors cadre → une seule demande de correction
-  const issues = formats.flatMap((f) => { const a = out.formats.find((x) => x.key === f.key); return a ? placementIssues(f, a) : [`${f.key} : format manquant`] })
+  const check = () => formats.flatMap((f) => { const a = out.formats.find((x) => x.key === f.key); return a ? placementIssues(f, a) : [`${f.key} : format manquant`] })
+  const issues = check()
   if (issues.length) {
     messages.push({ role: 'assistant', content: res.content.filter((b) => b.type === 'text') })
-    messages.push({ role: 'user', content: `Corrige ces placements (garde les autres identiques) : ${issues.join(' ; ')}. Les textes ne doivent recouvrir aucune des zones photo indiquées.` })
+    messages.push({ role: 'user', content: `Corrige ces placements (garde tout le reste identique) : ${issues.join(' ; ')}. Aucun texte ne doit recouvrir une zone photo ni sortir du fichier.` })
     ;({ out } = await ask(messages))
   }
-  out.issues = formats.flatMap((f) => { const a = out.formats.find((x) => x.key === f.key); return a ? placementIssues(f, a) : [] })
+  out.issues = check()
   cache[key] = out
   fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 1))
   return out
 }
 
 /** Boîte approximative d'un texte centré (fractions), d'après sa taille et son nombre de caractères. */
-const textBox = (v, chars, W, H) => {
-  const w = (v.size * 0.55 * chars) / W
+const textBox = (v, W, H) => {
+  const w = (v.size * 0.55 * Math.max(1, v.text.length) * (1 + (v.letter_spacing || 0) / 1000)) / W
   const h = (v.size * 1.1) / H
   return [v.x - w / 2, v.y - h / 2, v.x + w / 2, v.y + h / 2]
 }
 const overlap = (a, b) => Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]))
-/** Problèmes de placement d'un format : texte sur une photo ou hors de l'image. */
+/** Problèmes de placement d'un format : texte sur une photo ou hors du fichier (ou de la bande gauche). */
 function placementIssues(f, a) {
   const issues = []
-  for (const [role, v, chars] of [['prénoms', a.names, 13], ['date', a.date, 12]]) {
-    const b = textBox(v, chars, f.width, f.height)
+  const right = f.key.startsWith('s') ? 0.5 : 1
+  for (const v of a.texts) {
+    const b = textBox(v, f.width, f.height)
     const area = (b[2] - b[0]) * (b[3] - b[1])
-    if (f.boxes.some((h) => overlap(b, h) > area * 0.08)) issues.push(`${f.key} : les ${role} chevauchent une photo`)
-    if (b[0] < 0 || b[2] > (f.key.startsWith('s') ? 0.5 : 1) || b[1] < 0 || b[3] > 1) issues.push(`${f.key} : les ${role} dépassent ${f.key.startsWith('s') ? 'de la bande gauche' : 'de l\u2019image'}`)
+    if (f.boxes.some((h) => overlap(b, h) > area * 0.08)) issues.push(`${f.key} : « ${v.text} » chevauche une photo`)
+    if (b[0] < -0.01 || b[2] > right + 0.01 || b[1] < 0 || b[3] > 1) issues.push(`${f.key} : « ${v.text} » dépasse ${right < 1 ? 'de la bande gauche' : 'du fichier'}`)
   }
   return issues
 }
 
 const hex = (c, d) => (/^#[0-9a-f]{6}$/i.test(c ?? '') ? c : d)
 const clamp = (v, a, b) => Math.min(b, Math.max(a, Number(v) || 0))
+/** Réponse IA → textes par défaut du format (rôle, police, garde-fou de débordement). */
 const toDef = (a, key, W) => {
-  const book = key.startsWith('s')
-  const right = book ? 0.5 : 1
-  const one = (t, v, d) => {
-    const x = clamp(v.x, book ? 0.03 : 0.05, book ? 0.47 : 0.95)
-    // garde-fou : un texte qui déborderait du cadre (ou de la bande gauche) est réduit pour tenir
+  const right = key.startsWith('s') ? 0.5 : 1
+  return a.texts.filter((v) => v.text?.trim() && !/templates ?booth/i.test(v.text)).map((v) => {
+    const x = clamp(v.x, 0.02, right - 0.02)
     const room = 2 * Math.min(x, right - x) * 0.96
-    const fit = (room * W) / (0.55 * t.length)
-    return { t, x: +x.toFixed(3), y: +clamp(v.y, 0.03, 0.97).toFixed(3), sz: Math.round(clamp(Math.min(v.size, fit), 18, 400)), c: hex(v.color, d), b: !!v.bold }
-  }
-  return [one('Sophie & Marc', a.names, '#1a1410'), one('14 juin 2025', a.date, '#C9A84C')]
+    const fit = (room * W) / (0.55 * v.text.length * (1 + (v.letter_spacing || 0) / 1000))
+    const d = {
+      t: v.text.trim(), r: v.role, x: +x.toFixed(3), y: +clamp(v.y, 0.02, 0.98).toFixed(3),
+      sz: Math.round(clamp(Math.min(v.size, fit), 12, 500)), c: hex(v.color, '#1a1410'), b: !!v.bold,
+    }
+    if (v.italic) d.i = true
+    if (v.letter_spacing > 20) d.ls = Math.round(clamp(v.letter_spacing, 0, 800))
+    if (v.font) d.f = v.font
+    return d
+  })
 }
 
 // ───────────── planche de contrôle (--apercu) ─────────────
+const SAMPLE_DIR = path.join(HERE, '..', 'public', 'exemples')
+const SAMPLE_PHOTOS = fs.existsSync(SAMPLE_DIR) ? fs.readdirSync(SAMPLE_DIR).filter((f) => f.endsWith('.jpg')).sort().reverse().map((f) => path.join(SAMPLE_DIR, f)) : []
 async function contactSheet(slug, inputs, fmts) {
   fs.mkdirSync(PREVIEW_DIR, { recursive: true })
   const tiles = []
@@ -384,7 +412,14 @@ async function contactSheet(slug, inputs, fmts) {
     const def = fmts[f.key].def
     const t = (d) => `<text x="${d.x * f.width}" y="${d.y * f.height}" font-family="Georgia, serif" font-size="${d.sz}" fill="${d.c}" font-weight="${d.b ? 700 : 400}" text-anchor="middle" dominant-baseline="middle">${d.t.replace(/&/g, '&amp;')}</text>`
     const svg = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${f.width}" height="${f.height}">${def.map(t).join('')}<text x="24" y="70" font-size="56" fill="#d83232" font-family="Arial">${f.key}</text></svg>`)
-    const full = await sharp({ create: { width: f.width, height: f.height, channels: 3, background: '#9db0b6' } }).composite([{ input: f.buf }, { input: svg }]).png().toBuffer()
+    const photos = []
+    for (const [i, b] of f.boxes.entries()) {
+      const w = Math.max(1, Math.round((b[2] - b[0]) * f.width))
+      const h = Math.max(1, Math.round((b[3] - b[1]) * f.height))
+      const src = SAMPLE_PHOTOS[i % SAMPLE_PHOTOS.length]
+      photos.push({ input: await sharp(src).resize(w, h, { fit: 'cover', position: 'north' }).toBuffer(), left: Math.round(b[0] * f.width), top: Math.round(b[1] * f.height) })
+    }
+    const full = await sharp({ create: { width: f.width, height: f.height, channels: 3, background: '#d9d6cf' } }).composite([...photos, { input: f.buf }, { input: svg }]).png().toBuffer()
     tiles.push(await sharp(full).resize({ height: 600 }).png().toBuffer())
   }
   const metas = await Promise.all(tiles.map((x) => sharp(x).metadata()))
@@ -397,12 +432,45 @@ async function contactSheet(slug, inputs, fmts) {
 const CT = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', ttf: 'font/ttf', otf: 'font/otf', woff: 'font/woff', woff2: 'font/woff2' }
 async function upload(p, buf) {
   const ext = p.split('.').pop().toLowerCase()
-  if (!DRY) {
+  // simulation avec aperçu : fichiers déposés à part (apercu/…) pour un rendu fidèle, sans toucher aux thèmes en ligne
+  if (DRY && PREVIEW) p = `apercu/${p}`
+  if (!DRY || PREVIEW) {
     const { error } = await sb.storage.from(BUCKET).upload(p, buf, { upsert: true, contentType: CT[ext] ?? 'application/octet-stream', cacheControl: '31536000' })
     if (error) throw new Error(`envoi ${p} : ${error.message}`)
   }
   // ?v= = empreinte du contenu : l'URL change seulement si le fichier change
   return `${sb.storage.from(BUCKET).getPublicUrl(p).data.publicUrl}?v=${sha(buf).slice(0, 10)}`
+}
+
+// ───────────── polices manquantes ─────────────
+const FONT_DIR = path.join(HERE, '.ingest-polices')
+const fontKey = (n) => n.toLowerCase().replace(/[^a-z0-9]/g, '')
+const googleChecked = new Map()
+/** La police existe-t-elle sur Google Fonts ? (réponse mise en mémoire) */
+async function onGoogleFonts(name) {
+  if (!googleChecked.has(name)) {
+    googleChecked.set(name, fetch(`https://fonts.googleapis.com/css2?family=${name.trim().replace(/ /g, '+')}`, { headers: { 'User-Agent': 'Mozilla/5.0' } }).then((r) => r.ok, () => false))
+  }
+  return googleChecked.get(name)
+}
+/** Fichiers d'une police dafont (ZIP téléchargé une seule fois, gardé dans scripts/.ingest-polices/). */
+async function dafontFiles(url) {
+  const m = url.match(/dafont\.com\/([a-z0-9-]+)\.font/i)
+  if (!m) return []
+  const slug = m[1].replace(/-/g, '_')
+  const cached = path.join(FONT_DIR, `${slug}.zip`)
+  let buf
+  if (fs.existsSync(cached)) buf = fs.readFileSync(cached)
+  else {
+    const r = await fetch(`https://dl.dafont.com/dl/?f=${slug}`, { headers: { 'User-Agent': 'Mozilla/5.0' } })
+    if (!r.ok || !(r.headers.get('content-type') ?? '').includes('zip')) return []
+    buf = Buffer.from(await r.arrayBuffer())
+    fs.mkdirSync(FONT_DIR, { recursive: true })
+    fs.writeFileSync(cached, buf)
+  }
+  const z = await JSZip.loadAsync(buf)
+  const files = Object.values(z.files).filter((f) => !f.dir && FONT.test(f.name) && !IGNORE.test(f.name))
+  return Promise.all(files.map(async (f) => ({ name: path.posix.basename(f.name), buf: await f.async('nodebuffer') })))
 }
 
 // ───────────── traitement d'un thème ─────────────
@@ -432,11 +500,24 @@ async function ingest(t, existing, report) {
     const url = await upload(`${base}/fonts/${slugify(name)}.${e.name.split('.').pop().toLowerCase()}`, await e.read())
     fonts.push({ name, url, source: 'file' })
   }
+  // Polices citées par la documentation mais absentes des fichiers : Google Fonts, sinon dafont
+  const have = () => new Set(fonts.map((f) => fontKey(f.name)))
   for (const d of docFonts) {
-    if (/google/i.test(d.url) && !seenFont.has(d.name.toLowerCase())) {
+    if (have().has(fontKey(d.name))) continue
+    if (/google/i.test(d.url) || (await onGoogleFonts(d.name))) {
       seenFont.add(d.name.toLowerCase())
-      fonts.push({ name: d.name, url: `https://fonts.googleapis.com/css2?family=${d.name.replace(/ /g, '+')}:wght@400;700&display=swap`, source: 'google' })
-    } else if (!seenFont.has(d.name.toLowerCase())) r.warnings.push(`police « ${d.name} » requise mais absente des fichiers`)
+      fonts.push({ name: d.name, url: `https://fonts.googleapis.com/css2?family=${d.name.replace(/ /g, '+')}:ital,wght@0,400;0,700;1,400&display=swap`, source: 'google' })
+      continue
+    }
+    const files = /dafont\.com/i.test(d.url) ? await dafontFiles(d.url).catch(() => []) : []
+    // fichier « principal » de la famille (le plus proche du nom, sinon le premier)
+    const main = files.find((f) => fontKey(fontNameFromFile(f.name)) === fontKey(d.name)) ?? files.find((f) => !/bold|italic|light|black/i.test(f.name)) ?? files[0]
+    if (main) {
+      seenFont.add(d.name.toLowerCase())
+      const url = await upload(`${base}/fonts/${slugify(d.name)}.${main.name.split('.').pop().toLowerCase()}`, main.buf)
+      fonts.push({ name: d.name, url, source: 'file' })
+      r.warnings.push(`police « ${d.name} » téléchargée sur dafont — vérifier sa licence pour un usage commercial`)
+    } else r.warnings.push(`police « ${d.name} » introuvable (ni fichiers, ni Google Fonts, ni dafont)`)
   }
   // Police du template : la première citée par la documentation, sinon la première trouvée
   const fontName = docFonts.map((d) => d.name).find((n) => seenFont.has(n.toLowerCase())) ?? fonts[0]?.name ?? prev?.font_name ?? null
@@ -477,7 +558,12 @@ async function ingest(t, existing, report) {
   for (const key of order.filter((k) => assigned.has(k))) {
     const c = assigned.get(key)
     const file = normalize(c.e.name).replace(/\s+/g, '-').replace(/[^a-z0-9.-]/g, '')
-    fmts[key] = { w: c.meta.width, h: c.meta.height, src: await upload(`${base}/${file}`, c.buf), ...FORMAT_META[key] }
+    const mini = await sharp(c.buf).resize({ width: c.meta.width >= c.meta.height ? 720 : 480 }).png({ compressionLevel: 9, palette: true, quality: 90 }).toBuffer()
+    fmts[key] = {
+      w: c.meta.width, h: c.meta.height, src: await upload(`${base}/${file}`, c.buf), ...FORMAT_META[key],
+      thumb: await upload(`${base}/mini/${file}`, mini),
+      holes: c.h.boxes.map((b) => b.map((v) => +v.toFixed(4))),
+    }
     aiInput.push({ key, buf: c.buf, width: c.meta.width, height: c.meta.height, hash: sha(c.buf), boxes: c.h.boxes })
   }
   for (const c of cands) if (!c.used) extra.push(c)
@@ -487,7 +573,8 @@ async function ingest(t, existing, report) {
   let style = prev?.style ?? null
   let ai = null
   if (USE_AI) {
-    try { ai = await analyze(t.name, aiInput) } catch (err) { r.warnings.push(`IA : ${err.message}`) }
+    const exampleBuf = preview ? await preview.read() : null
+    try { ai = await analyze(t.name, aiInput, exampleBuf, fonts.length ? fonts : prev?.fonts ?? []) } catch (err) { r.warnings.push(`IA : ${err.message}`) }
   }
   if (ai?.style) style = ai.style
   if (ai?.issues?.length) r.warnings.push(...ai.issues.map((i) => `à vérifier — ${i}`))
@@ -527,6 +614,7 @@ async function ingest(t, existing, report) {
     welcome: welcome_screens.length, digits: Object.keys(digitUrls).length, extra: extra_files.length,
   })
 
+  simulated.push({ id: prev?.id ?? slug, ...row })
   if (!DRY) {
     if (prev) {
       const { error } = await sb.from('themes').update(row).eq('slug', slug)
@@ -545,7 +633,7 @@ async function ingest(t, existing, report) {
 // ───────────── programme principal ─────────────
 const t0 = Date.now()
 console.log(`\nIngestion des thèmes — ${ROOT}${DRY ? '  [SIMULATION]' : ''}${USE_AI ? `  [IA ${MODEL}]` : '  [sans IA]'}\n`)
-const { data: rows, error } = await sb.from('themes').select('slug, font_name, style, preview_url, fmts, fonts, digits, welcome_screens, sort_order')
+const { data: rows, error } = await sb.from('themes').select('id, slug, font_name, style, preview_url, fmts, fonts, digits, welcome_screens, sort_order')
 if (error) fail(`lecture de la table themes : ${error.message}`)
 const existing = new Map(rows.filter((r) => r.slug).map((r) => [r.slug, r]))
 
@@ -555,6 +643,8 @@ themes = themes.slice(0, LIMIT)
 console.log(`${themes.length} thème(s) à traiter\n`)
 
 const report = []
+/** Thèmes tels qu'ils seraient écrits (export JSON pour la page /apercu du Studio) */
+const simulated = []
 const allFonts = []
 for (const [n, t] of themes.entries()) {
   process.stdout.write(`[${n + 1}/${themes.length}] ${t.name} … `)
@@ -604,6 +694,16 @@ if (warn.length) {
   for (const r of warn) console.log(`  • ${r.name} : ${r.warnings.join(' ; ')}`)
 }
 console.log(`\nTerminé en ${Math.round((Date.now() - t0) / 1000)} s${DRY ? ' (simulation : rien n’a été envoyé ni écrit)' : ''}.\n`)
+
+// Données simulées → page /apercu du Studio (http://localhost:5173/apercu?local=1)
+if (PREVIEW) {
+  fs.mkdirSync(PREVIEW_DIR, { recursive: true })
+  fs.writeFileSync(path.join(PREVIEW_DIR, 'themes.json'), JSON.stringify(simulated))
+  const pub = path.join(HERE, '..', 'public', '__apercu')
+  fs.mkdirSync(pub, { recursive: true })
+  fs.writeFileSync(path.join(pub, 'themes.json'), JSON.stringify(simulated))
+  console.log('Aperçu fidèle : http://localhost:5173/apercu?local=1 (avec pnpm dev)')
+}
 
 // Page récapitulative des planches de contrôle (--apercu) : scripts/.ingest-apercu/index.html
 if (PREVIEW && fs.existsSync(PREVIEW_DIR)) {

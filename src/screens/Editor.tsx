@@ -24,12 +24,13 @@ import { renderPlan, renderPrint, toBlob } from '../editor/export'
 import { uploadBlobs } from '../lib/upload'
 import { api } from '../lib/api'
 import { LAST_SEND_KEY, type LastSend } from './Envoye'
+import { assignPhotos, findHoles, loadImage, samplePhotos } from '../lib/samples'
 import '../styles/editor.css'
 
 const BASE_PALETTE = ['#1a1410', '#ffffff', '#C9A84C', '#d85a30', '#3a5a8c', '#4f6b45']
 const googleFont = (name: string): ThemeFont => ({ name, source: 'google', url: `https://fonts.googleapis.com/css2?family=${name.replace(/ /g, '+')}&display=swap` })
 
-type Spec = { w: number; h: number; bookmark: boolean; title: string; src?: string; def?: DefText[] }
+type Spec = { w: number; h: number; bookmark: boolean; title: string; src?: string; def?: DefText[]; holes?: [number, number, number, number][] }
 
 /** Écran 4 : éditeur. */
 export default function Editor() {
@@ -96,7 +97,7 @@ export default function Editor() {
     const f = theme?.fmts?.[fmtKey as FormatKey]
     if (!theme || !f) return null
     const meta = THEME_FORMATS[fmtKey as FormatKey]
-    return { w: f.w, h: f.h, bookmark: !!meta?.bookmark, title: meta?.title ?? f.lbl ?? fmtKey, src: f.src, def: f.def }
+    return { w: f.w, h: f.h, bookmark: !!meta?.bookmark, title: meta?.title ?? f.lbl ?? fmtKey, src: f.src, def: f.def, holes: f.holes }
   }, [libre, theme, fmtKey, loaded])
 
   const themeFonts = useMemo<ThemeFont[]>(() => {
@@ -161,8 +162,8 @@ export default function Editor() {
             if (x >= 0.4) x = x / 2
           }
           e.addText({
-            text: defText(d.t, i, info), x: x * spec.w, y: d.y * spec.h, size: d.sz, color: d.c,
-            font: d.f ?? mainFont, bold: d.b, italic: d.i, align: d.al, spacing: d.ls, role: i === 0 ? 'names' : 'date',
+            text: defText(d.t, i, info, d.r), x: x * spec.w, y: d.y * spec.h, size: d.sz, color: d.c,
+            font: d.f ?? mainFont, bold: d.b, italic: d.i, align: d.al, spacing: d.ls, role: d.r === 'other' ? 'text' : d.r ?? (i === 0 ? 'names' : 'date'),
           }, false)
         })
         e.resetHistory()
@@ -205,6 +206,25 @@ export default function Editor() {
   useEffect(() => {
     if (master && ed && params.get('export') === 'png' && !autoExport.current) { autoExport.current = true; downloadPrint() }
   }, [master, ed, params, downloadPrint])
+
+  // Photos d'exemple dans les emplacements (trous du template et zones photo), pour se projeter.
+  useEffect(() => {
+    if (!ed || !spec) return
+    let ok = true
+    ;(async () => {
+      const urls = samplePhotos(theme?.category)
+      const imgs = await Promise.all(urls.map(loadImage))
+      const bg = ed.canvas.backgroundImage as { getElement?: () => HTMLImageElement } | undefined
+      let holes: { box: [number, number, number, number]; img: HTMLImageElement }[] = []
+      if (spec.src && bg?.getElement) {
+        const boxes = spec.holes ?? (await findHoles(bg.getElement()))
+        const names = assignPhotos(boxes, urls, spec.bookmark)
+        holes = boxes.map((box, i) => ({ box, img: imgs[urls.indexOf(names[i])] }))
+      }
+      if (ok) ed.setSamples(holes, imgs)
+    })().catch((e) => console.warn('photos d’exemple', e))
+    return () => { ok = false }
+  }, [ed, spec, theme])
 
   // Avertit avant de quitter avec des changements non sauvegardés.
   useEffect(() => {
@@ -461,6 +481,7 @@ export default function Editor() {
               <span>{ed.zoomPercent} %</span>
               <button onClick={() => ed.zoomBy(1)} disabled={ed.zoomPercent >= 400} aria-label="Zoomer">+</button>
               <button onClick={() => ed.zoomFit()} title="Ajuster à l'écran" aria-label="Ajuster à l'écran">⤢</button>
+              <button className={ed.showSamples ? 'on' : ''} onClick={() => ed.toggleSamples()} title={ed.showSamples ? 'Masquer les photos d’exemple' : 'Voir avec des photos d’exemple'} aria-pressed={ed.showSamples}>📷</button>
             </div>
           )}
           {!master && <Help variant="stage" project={project.proj ? { id: project.proj.id, name: project.proj.name ?? undefined } : undefined} />}

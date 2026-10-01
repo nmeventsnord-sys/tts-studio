@@ -8,6 +8,7 @@ import Galerie from './screens/Galerie'
 import Formats from './screens/Formats'
 import Projets from './screens/Projets'
 import Envoye from './screens/Envoye'
+import Apercu from './screens/Apercu'
 
 // L'éditeur (Fabric, outils image) est chargé à la demande : accueil et galerie s'ouvrent plus vite.
 const Editor = lazy(() => import('./screens/Editor'))
@@ -33,6 +34,7 @@ export default function App() {
       <Route path="/formats/:themeId" element={guard(<Formats />)} />
       <Route path="/editeur" element={guard(<Suspense fallback={<div className="spinner" />}><Editor /></Suspense>)} />
       <Route path="/projets" element={guard(<Projets />)} />
+      <Route path="/apercu" element={<Apercu />} />
       <Route path="/envoye" element={guard(<Envoye />)} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

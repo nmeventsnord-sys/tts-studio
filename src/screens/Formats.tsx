@@ -2,34 +2,12 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Hero } from '../components/Hero'
 import { Help } from '../components/Help'
-import { FREE_FORMATS, defText, readInfo, saveInfo, themeFormats, type EventInfo, type FreeFormatKey } from '../data/formats'
-import { fontStack, loadFonts } from '../lib/fonts'
-import { getTheme, type Theme, type ThemeFormat } from '../lib/themes'
+import { FREE_FORMATS, readInfo, saveInfo, themeFormats, type EventInfo, type FreeFormatKey } from '../data/formats'
+import { loadFonts } from '../lib/fonts'
+import { TemplatePreview } from '../components/TemplatePreview'
+import { getTheme, type Theme } from '../lib/themes'
 
 const PV_H = 150
-
-/** Aperçu réel d'un format : PNG du thème (trous visibles) + textes par défaut avec les prénoms saisis. */
-function Preview({ fmt, font, info }: { fmt: ThemeFormat; font: string | null; info: EventInfo }) {
-  const k = Math.min(PV_H / fmt.h, 190 / fmt.w)
-  const w = fmt.w * k
-  const h = fmt.h * k
-  return (
-    <div className="pvbox" style={{ width: w, height: h }}>
-      <img src={fmt.src} alt="" loading="lazy" draggable={false} />
-      {(fmt.def ?? []).map((d, i) => (
-        <span
-          key={i}
-          style={{
-            left: `${d.x * 100}%`, top: `${d.y * 100}%`, fontSize: d.sz * k, color: d.c,
-            fontWeight: d.b ? 700 : 400, fontStyle: d.i ? 'italic' : 'normal', fontFamily: fontStack(d.f ?? font),
-          }}
-        >
-          {defText(d.t, i, info)}
-        </span>
-      ))}
-    </div>
-  )
-}
 
 /** Écran 3 : choix du format (thème ou création libre). */
 export default function Formats() {
@@ -69,9 +47,9 @@ export default function Formats() {
         <div className="toolbar">
           <div className="toolbar-in">
             <div className="row infos">
-              <label>Tes prénoms<input value={info.names} maxLength={60} onChange={(e) => edit({ ...info, names: e.target.value })} /></label>
-              <label>Date de l'événement<input value={info.date} maxLength={40} onChange={(e) => edit({ ...info, date: e.target.value })} /></label>
-              <small>Ils s'affichent tout de suite dans chaque format, dans la police du thème.</small>
+              <label>Tes prénoms<input value={info.names} maxLength={60} placeholder="Ex. Sophie & Marc" onChange={(e) => edit({ ...info, names: e.target.value })} /></label>
+              <label>Date de l'événement<input value={info.date} maxLength={40} placeholder="Ex. 14 juin 2026" onChange={(e) => edit({ ...info, date: e.target.value })} /></label>
+              <small>Ils remplacent ceux de l'exemple dans chaque format, dans la police du thème.</small>
             </div>
           </div>
         </div>
@@ -91,7 +69,7 @@ export default function Formats() {
                 })
               : formats.map(([k, f, meta]) => (
                   <button className="fmt" key={k} onClick={() => open(k)}>
-                    <div className="pv"><Preview fmt={f} font={theme!.font_name} info={info} /></div>
+                    <div className="pv"><TemplatePreview fmt={f} font={theme!.font_name} info={info} category={theme!.category} bookmark={meta.bookmark} width={f.w * Math.min(PV_H / f.h, 190 / f.w)} className="pvbox" /></div>
                     <h4>{meta.title}</h4><p>{meta.sub}</p>
                   </button>
                 ))}

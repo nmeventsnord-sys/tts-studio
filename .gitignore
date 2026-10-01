@@ -8,3 +8,5 @@ env.download
 *.log
 scripts/.ingest-cache.json
 scripts/.ingest-apercu/
+public/__apercu/
+scripts/.ingest-polices/

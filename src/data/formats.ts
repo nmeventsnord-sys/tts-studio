@@ -35,15 +35,28 @@ export function themeFormats(t: Theme): [string, ThemeFormat, FormatInfo][] {
 /** Prénoms et date saisis par le client, repris dans les textes par défaut de l'éditeur. */
 export type EventInfo = { names: string; date: string }
 const INFO_KEY = 'tts-studio-info'
-export const DEFAULT_INFO: EventInfo = { names: 'Sophie & Marc', date: '14 juin 2025' }
+/** Vide = on garde les textes d'exemple du thème (ex. « Linda & William ») */
+export const DEFAULT_INFO: EventInfo = { names: '', date: '' }
+/** Textes d'exemple historiques (détection des textes non personnalisés avant envoi) */
+export const SAMPLE_TEXTS = ['Sophie & Marc', '14 juin 2025']
 export function readInfo(): EventInfo {
-  try { return { ...DEFAULT_INFO, ...JSON.parse(localStorage.getItem(INFO_KEY) || '{}') } } catch { return DEFAULT_INFO }
+  try {
+    const i = { ...DEFAULT_INFO, ...JSON.parse(localStorage.getItem(INFO_KEY) || '{}') }
+    // anciennes valeurs par défaut enregistrées : on les oublie
+    return { names: SAMPLE_TEXTS.includes(i.names) ? '' : i.names, date: SAMPLE_TEXTS.includes(i.date) ? '' : i.date }
+  } catch { return DEFAULT_INFO }
 }
 export const saveInfo = (i: EventInfo) => localStorage.setItem(INFO_KEY, JSON.stringify(i))
 
-/** Texte à afficher pour un texte par défaut : les prénoms/la date remplacent les valeurs d'exemple. */
-export function defText(t: string, index: number, info: EventInfo): string {
-  if (/sophie|&/i.test(t) || (index === 0 && !/\d/.test(t))) return info.names || t
-  if (/\d{4}|juin|date/i.test(t) || index === 1) return info.date || t
+/**
+ * Texte à afficher pour un texte par défaut. Rôle connu (r) : les prénoms / la date saisis remplacent
+ * ceux de l'exemple ; les autres textes du thème restent tels quels. Sans rôle (anciennes données) : déduction.
+ */
+export function defText(t: string, index: number, info: EventInfo, role?: 'names' | 'date' | 'other'): string {
+  if (role === 'names') return info.names || t
+  if (role === 'date') return info.date || t
+  if (role === 'other') return t
+  if (/sophie|&/i.test(t) || (index === 0 && !/d/.test(t))) return info.names || t
+  if (/d{4}|juin|date/i.test(t) || index === 1) return info.date || t
   return t
 }

@@ -94,3 +94,5 @@
 .flyout.digits{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;width:250px}
 .flyout.digits button{padding:4px;display:flex;align-items:center;justify-content:center;height:52px}
 .flyout.digits img{max-width:100%;max-height:44px}
+
+.zoomctl button.on{background:rgba(242,193,46,.25)}

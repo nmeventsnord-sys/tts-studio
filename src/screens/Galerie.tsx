@@ -3,6 +3,8 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Hero } from '../components/Hero'
 import { Help } from '../components/Help'
 import { CATEGORIES, STYLES, fold, formatCount, loadThemes, type Theme } from '../lib/themes'
+import { ThemeThumb } from '../components/ThemeThumb'
+import { readInfo } from '../data/formats'
 
 /** Écran 2 : galerie des thèmes (table themes). Filtres gardés dans l'URL pour le retour arrière. */
 export default function Galerie() {
@@ -10,6 +12,7 @@ export default function Galerie() {
   const [params, setParams] = useSearchParams()
   const [themes, setThemes] = useState<Theme[] | null>(null)
   const [err, setErr] = useState('')
+  const info = useMemo(readInfo, [])
 
   const q = params.get('q') ?? ''
   const cat = params.get('cat') ?? 'mariage'
@@ -101,7 +104,7 @@ export default function Galerie() {
           {shown.map((t) => (
             <article className="card" key={t.id}>
               <div className="thumb" onClick={() => open(t)}>
-                {t.preview_url ? <img src={t.preview_url} alt={`Aperçu du thème ${t.name}`} loading="lazy" decoding="async" /> : <span className="meta">Aperçu indisponible</span>}
+                <ThemeThumb theme={t} info={info} />
                 <span className="badge">{t.style ?? CATEGORIES.find((c) => c.key === t.category)?.label ?? t.category}</span>
                 {!!t.digits && Object.keys(t.digits as object).length > 0 && <span className="badge" style={{ left: 'auto', right: 10 }}>🔢 Chiffres</span>}
               </div>

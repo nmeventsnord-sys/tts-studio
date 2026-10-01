@@ -71,13 +71,41 @@ export const MIN_ZOOM = 1 // 100 % = page entière visible (zoom limité au canv
 export const MAX_ZOOM = 4
 export const ZONE_MAX = 4
 
+/** Photos d'exemple affichées dans les zones (écran seulement ; jamais à l'export). */
+const zonePreview: { photos: HTMLImageElement[]; on: boolean; exporting: boolean } = { photos: [], on: false, exporting: false }
+
+/** Dessine une image en mode « cover » dans le rectangle (x, y, w, h), cadrée vers le haut (visages). */
+function drawCover(ctx: CanvasRenderingContext2D, img: HTMLImageElement, x: number, y: number, w: number, h: number) {
+  const k = Math.max(w / img.width, h / img.height)
+  const sw = w / k
+  const sh = h / k
+  const sx = (img.width - sw) / 2
+  const sy = Math.max(0, (img.height - sh) * 0.28)
+  ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h)
+}
+
 /** Icône + numéro au centre d'une prise de vue (repère local de l'objet). */
-function drawZoneLabel(ctx: CanvasRenderingContext2D, z: FabricObject & { zone?: number }) {
+function drawZoneLabel(ctx: CanvasRenderingContext2D, z: FabricObject & { zone?: number }, small = false) {
   const sx = z.scaleX ?? 1
   const sy = z.scaleY ?? 1
-  const size = Math.max(18, Math.min((z.width ?? 0) * sx, (z.height ?? 0) * sy) * 0.28)
+  const size = Math.max(18, Math.min((z.width ?? 0) * sx, (z.height ?? 0) * sy) * (small ? 0.14 : 0.28))
   ctx.save()
   ctx.scale(1 / sx, 1 / sy)
+  if (small) {
+    // pastille numérotée dans le coin, la photo reste visible
+    const w = (z.width ?? 0) * sx
+    const h = (z.height ?? 0) * sy
+    ctx.translate(-w / 2 + size * 1.1, -h / 2 + size * 1.1)
+    ctx.fillStyle = 'rgba(216,50,50,.9)'
+    ctx.beginPath(); ctx.arc(0, 0, size * 0.85, 0, Math.PI * 2); ctx.fill()
+    ctx.fillStyle = '#fff'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.font = `600 ${size}px Poppins, sans-serif`
+    ctx.fillText(String(z.zone ?? ''), 0, size * 0.05)
+    ctx.restore()
+    return
+  }
   ctx.fillStyle = '#fff'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
@@ -116,6 +144,9 @@ export class StudioEditor {
   private loading = false
   private clip: EditorObject | null = null
   dirty = false
+  /** Photos d'exemple dans les emplacements du template (écran seulement). */
+  private samples: { box: [number, number, number, number]; img: HTMLImageElement }[] = []
+  showSamples = true
   tool: Tool = 'select'
   toolOpts = { tol: 30, contiguous: true, brush: 40 }
   busy = false
@@ -263,6 +294,23 @@ export class StudioEditor {
     else if (bg.kind === 'generated') this.setGeneratedBackground(bg.id)
     else if (bg.kind === 'asset') await this.setBackgroundImage((await assetUrl(bg.key)) ?? bg.src, bg)
     else await this.setBackgroundImage(bg.src, bg)
+  }
+
+/** Photos d'exemple : une par trou du template, et une par zone photo (dans l'ordre des numéros). */
+  setSamples(holes: { box: [number, number, number, number]; img: HTMLImageElement }[], zonePhotos: HTMLImageElement[]) {
+    this.samples = holes
+    zonePreview.photos = zonePhotos
+    zonePreview.on = this.showSamples
+    this.objects.forEach((o) => { if (o.role === 'zone') o.dirty = true })
+    this.canvas.requestRenderAll()
+  }
+
+  toggleSamples(on = !this.showSamples) {
+    this.showSamples = on
+    zonePreview.on = on
+    this.objects.forEach((o) => { if (o.role === 'zone') o.dirty = true })
+    this.canvas.requestRenderAll()
+    this.emit()
   }
 
   setBackgroundColor(color: string) {
@@ -430,8 +478,16 @@ export class StudioEditor {
     // Le numéro est dessiné avec la zone : il respecte l'ordre des calques et la copie du marque-page.
     const z = r as Rect & EditorObject & { _render: (ctx: CanvasRenderingContext2D) => void }
     z._render = function (ctx: CanvasRenderingContext2D) {
-      Rect.prototype._render.call(this, ctx)
-      drawZoneLabel(ctx, this)
+      const photo = zonePreview.on && !zonePreview.exporting ? zonePreview.photos[((this as EditorObject).zone ?? 1) - 1] : undefined
+      if (photo) {
+        ctx.save()
+        drawCover(ctx, photo, -this.width / 2, -this.height / 2, this.width, this.height)
+        ctx.restore()
+        drawZoneLabel(ctx, this, true)
+      } else {
+        Rect.prototype._render.call(this, ctx)
+        drawZoneLabel(ctx, this)
+      }
     }
     const free = r.zone === 1
     r.setControlsVisibility({ mt: free, mb: free, ml: free, mr: free })
@@ -743,11 +799,15 @@ export class StudioEditor {
     const c = this.canvas
     const vpt = c.viewportTransform.slice() as TMat2D
     this.exporting = true
+    zonePreview.exporting = true
+    this.objects.forEach((o) => { if (o.role === 'zone') o.dirty = true })
     c.viewportTransform = [1, 0, 0, 1, 0, 0]
     try {
       return c.toCanvasElement(opts.multiplier ?? 1, { left: 0, top: 0, width: this.w, height: this.h, filter: opts.filter })
     } finally {
       this.exporting = false
+      zonePreview.exporting = false
+      this.objects.forEach((o) => { if (o.role === 'zone') o.dirty = true })
       c.setViewportTransform(vpt)
       c.requestRenderAll()
     }
@@ -770,6 +830,10 @@ export class StudioEditor {
       ctx.shadowOffsetY = 10 * v[0]
       ctx.fillStyle = '#fff'
       ctx.fillRect(0, 0, this.w, this.h)
+      ctx.shadowColor = 'transparent'
+      // photos d'exemple sous le template (les trous les laissent voir)
+      const theme = this.background?.kind === 'theme' || this.background?.kind === 'asset'
+      if (this.showSamples && theme) for (const s of this.samples) drawCover(ctx, s.img, s.box[0] * this.w, s.box[1] * this.h, (s.box[2] - s.box[0]) * this.w, (s.box[3] - s.box[1]) * this.h)
       ctx.restore()
     })
 

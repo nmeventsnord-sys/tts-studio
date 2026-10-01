@@ -1,9 +1,9 @@
 import { supabase } from './supabase'
 
 /** Texte par défaut d'un format (x, y en fraction de la largeur/hauteur, sz en px du fichier natif). */
-export type DefText = { t: string; x: number; y: number; sz: number; c: string; b?: boolean; i?: boolean; f?: string; ls?: number; al?: 'left' | 'center' | 'right' }
+export type DefText = { t: string; x: number; y: number; sz: number; c: string; b?: boolean; i?: boolean; f?: string; ls?: number; al?: 'left' | 'center' | 'right'; up?: boolean; r?: 'names' | 'date' | 'other' }
 export type FormatKey = 's4p' | 's6p' | 'port1' | 'port2' | 'land3' | 'land1'
-export type ThemeFormat = { w: number; h: number; src: string; lbl?: string; dim?: string; def?: DefText[] }
+export type ThemeFormat = { w: number; h: number; src: string; lbl?: string; dim?: string; def?: DefText[]; holes?: [number, number, number, number][]; thumb?: string }
 export type ThemeFont = { name: string; url: string; source?: 'google' | 'file' }
 export type Theme = {
   id: string

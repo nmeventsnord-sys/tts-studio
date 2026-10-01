@@ -3,7 +3,7 @@ import { IText } from 'fabric'
 import type { StudioEditor } from './engine'
 import { renderPlan } from './export'
 import type { Identity } from '../lib/session'
-import { DEFAULT_INFO } from '../data/formats'
+import { SAMPLE_TEXTS } from '../data/formats'
 
 type Props = {
   ed: StudioEditor
@@ -22,7 +22,7 @@ export function SendModal({ ed, identity, hasThemeHoles, onCancel, onConfirm }: 
   const warnings = useMemo(() => {
     const w: string[] = []
     const texts = ed.objects.filter((o) => o instanceof IText).map((o) => (o as IText).text ?? '')
-    if (texts.some((t) => t.trim() === DEFAULT_INFO.names || t.trim() === DEFAULT_INFO.date || /^Votre (titre|sous-titre|texte)$/.test(t.trim())))
+    if (texts.some((t) => SAMPLE_TEXTS.includes(t.trim()) || /^Votre (titre|sous-titre|texte)$/.test(t.trim())))
       w.push("Il reste un texte d'exemple (« Sophie & Marc », « 14 juin 2025 » ou « Votre texte »).")
     if (!ed.zones.length && !hasThemeHoles) w.push("Aucune prise de vue : ajoute au moins une zone 📷 pour indiquer où iront les photos.")
     return w
