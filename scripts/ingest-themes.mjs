@@ -12,6 +12,7 @@
  *   --no-ai          pas d'analyse IA : garde les textes par défaut déjà en base (ou des valeurs neutres)
  *   --reanalyze      ignore le cache IA local (scripts/.ingest-cache.json)
  *   --keep-def       garde les textes par défaut (def) déjà en base quand ils existent
+ *   --apercu         planche de contrôle par thème (textes posés sur les vrais PNG) dans scripts/.ingest-apercu/
  *
  * Variables (.env.local) : TEMPLATES_PATH, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, ANTHROPIC_API_KEY,
  * ANTHROPIC_WORKSPACE_ID (si la clé n'est pas rattachée à un workspace).
@@ -45,12 +46,15 @@ const DRY = flag('dry-run')
 const USE_AI = !flag('no-ai') && (!DRY || flag('ai'))
 const REANALYZE = flag('reanalyze')
 const KEEP_DEF = flag('keep-def')
+const PREVIEW = flag('apercu')
+const PREVIEW_DIR = path.join(HERE, '.ingest-apercu')
 const ONLY = opt('only')?.toLowerCase()
 const LIMIT = Number(opt('limit') ?? Infinity)
 
 const ROOT = process.env.TEMPLATES_PATH?.trim()
 const BUCKET = 'template'
 const MODEL = 'claude-opus-5-5'
+const PROMPT_VERSION = 'v2-trous'
 const CACHE_FILE = path.join(HERE, '.ingest-cache.json')
 
 if (!ROOT || !fs.existsSync(ROOT)) fail(`TEMPLATES_PATH introuvable : « ${ROOT ?? ''} » (dossier local attendu, voir .env.example)`)
@@ -164,7 +168,7 @@ async function holes(buf) {
   for (let p = 0; p < w * h; p++) {
     if (seen[p] || data[p * 4 + 3] > 24) continue
     let n = 0
-    let minX = w, maxX = 0
+    let minX = w, maxX = 0, minY = h, maxY = 0
     const stack = [p]
     seen[p] = 1
     while (stack.length) {
@@ -174,12 +178,14 @@ async function holes(buf) {
       if (x < minX) minX = x
       if (x > maxX) maxX = x
       const y = (q - x) / w
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
       for (const r of [x > 0 ? q - 1 : -1, x < w - 1 ? q + 1 : -1, y > 0 ? q - w : -1, y < h - 1 ? q + w : -1])
         if (r >= 0 && !seen[r] && data[r * 4 + 3] <= 24) { seen[r] = 1; stack.push(r) }
     }
-    if (n > w * h * 0.006) comps.push({ n, cx: (minX + maxX) / 2 / w })
+    if (n > w * h * 0.006) comps.push({ n, cx: (minX + maxX) / 2 / w, box: [minX / w, minY / h, (maxX + 1) / w, (maxY + 1) / h] })
   }
-  return { count: comps.length, share: comps.reduce((s, c) => s + c.n, 0) / (w * h), left: comps.filter((c) => c.cx < 0.5).length }
+  return { count: comps.length, share: comps.reduce((s, c) => s + c.n, 0) / (w * h), left: comps.filter((c) => c.cx < 0.5).length, boxes: comps.map((c) => c.box) }
 }
 
 /**
@@ -277,7 +283,8 @@ Pour chaque format fourni, indique où placer deux textes personnalisables : les
 - style = l'ambiance générale du thème parmi la liste.`
 
 async function analyze(theme, formats) {
-  const key = sha(Buffer.concat(formats.map((f) => Buffer.from(f.hash))))
+  // la clé change avec les images ET avec la consigne (PROMPT_VERSION)
+  const key = sha(Buffer.concat([Buffer.from(PROMPT_VERSION), ...formats.map((f) => Buffer.from(f.hash))]))
   if (!REANALYZE && cache[key]) return cache[key]
   const content = []
   for (const f of formats) {
@@ -287,27 +294,59 @@ async function analyze(theme, formats) {
     const meta = await sharp(small).metadata()
     const bg = await sharp({ create: { width: meta.width, height: meta.height, channels: 3, background: '#e4e4e4' } })
       .composite([{ input: tile, tile: true }, { input: small }]).jpeg({ quality: 82 }).toBuffer()
-    content.push({ type: 'text', text: `Format « ${f.key} » (${FORMAT_META[f.key].lbl}) — fichier natif ${f.width} × ${f.height} px${f.key.startsWith('s') ? ' — marque-page double' : ''} :` })
+    const holesTxt = f.boxes.map((b) => `[${b.map((v) => v.toFixed(2)).join(', ')}]`).join(' ')
+    content.push({ type: 'text', text: `Format « ${f.key} » (${FORMAT_META[f.key].lbl}) — fichier natif ${f.width} × ${f.height} px${f.key.startsWith('s') ? ' — marque-page double' : ''}. Photos (trous, fractions x0, y0, x1, y1) : ${holesTxt}` })
     content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: bg.toString('base64') } })
   }
   content.push({ type: 'text', text: `Thème : « ${theme} ». Réponds pour chacun des formats : ${formats.map((f) => f.key).join(', ')}.` })
 
-  const res = await anthropic.beta.messages.create({
-    model: MODEL,
-    max_tokens: 16000,
-    betas: ['server-side-fallback-2026-07-01'],
-    fallbacks: 'default',
-    output_config: { effort: 'medium', format: { type: 'json_schema', schema: AI_SCHEMA } },
-    system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }],
-    messages: [{ role: 'user', content }],
-  })
-  if (res.stop_reason === 'refusal') throw new Error('analyse IA refusée')
-  const text = res.content.find((b) => b.type === 'text')?.text
-  if (!text) throw new Error('réponse IA vide')
-  const out = JSON.parse(text)
+  const ask = async (messages) => {
+    const res = await anthropic.beta.messages.create({
+      model: MODEL,
+      max_tokens: 16000,
+      betas: ['server-side-fallback-2026-07-01'],
+      fallbacks: 'default',
+      output_config: { effort: 'medium', format: { type: 'json_schema', schema: AI_SCHEMA } },
+      system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }],
+      messages,
+    })
+    if (res.stop_reason === 'refusal') throw new Error('analyse IA refusée')
+    const text = res.content.find((b) => b.type === 'text')?.text
+    if (!text) throw new Error('réponse IA vide')
+    return { res, out: JSON.parse(text) }
+  }
+  const messages = [{ role: 'user', content }]
+  let { res, out } = await ask(messages)
+  // Contrôle : un texte sur une photo ou hors cadre → une seule demande de correction
+  const issues = formats.flatMap((f) => { const a = out.formats.find((x) => x.key === f.key); return a ? placementIssues(f, a) : [`${f.key} : format manquant`] })
+  if (issues.length) {
+    messages.push({ role: 'assistant', content: res.content.filter((b) => b.type === 'text') })
+    messages.push({ role: 'user', content: `Corrige ces placements (garde les autres identiques) : ${issues.join(' ; ')}. Les textes ne doivent recouvrir aucune des zones photo indiquées.` })
+    ;({ out } = await ask(messages))
+  }
+  out.issues = formats.flatMap((f) => { const a = out.formats.find((x) => x.key === f.key); return a ? placementIssues(f, a) : [] })
   cache[key] = out
   fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 1))
   return out
+}
+
+/** Boîte approximative d'un texte centré (fractions), d'après sa taille et son nombre de caractères. */
+const textBox = (v, chars, W, H) => {
+  const w = (v.size * 0.55 * chars) / W
+  const h = (v.size * 1.1) / H
+  return [v.x - w / 2, v.y - h / 2, v.x + w / 2, v.y + h / 2]
+}
+const overlap = (a, b) => Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]))
+/** Problèmes de placement d'un format : texte sur une photo ou hors de l'image. */
+function placementIssues(f, a) {
+  const issues = []
+  for (const [role, v, chars] of [['prénoms', a.names, 13], ['date', a.date, 12]]) {
+    const b = textBox(v, chars, f.width, f.height)
+    const area = (b[2] - b[0]) * (b[3] - b[1])
+    if (f.boxes.some((h) => overlap(b, h) > area * 0.08)) issues.push(`${f.key} : les ${role} chevauchent une photo`)
+    if (b[0] < 0 || b[2] > (f.key.startsWith('s') ? 0.5 : 1) || b[1] < 0 || b[3] > 1) issues.push(`${f.key} : les ${role} dépassent ${f.key.startsWith('s') ? 'de la bande gauche' : 'de l\u2019image'}`)
+  }
+  return issues
 }
 
 const hex = (c, d) => (/^#[0-9a-f]{6}$/i.test(c ?? '') ? c : d)
@@ -316,6 +355,23 @@ const toDef = (a, key) => {
   const book = key.startsWith('s')
   const one = (t, v, d) => ({ t, x: +clamp(v.x, book ? 0.03 : 0.05, book ? 0.47 : 0.95).toFixed(3), y: +clamp(v.y, 0.03, 0.97).toFixed(3), sz: Math.round(clamp(v.size, 18, 400)), c: hex(v.color, d), b: !!v.bold })
   return [one('Sophie & Marc', a.names, '#1a1410'), one('14 juin 2025', a.date, '#C9A84C')]
+}
+
+// ───────────── planche de contrôle (--apercu) ─────────────
+async function contactSheet(slug, inputs, fmts) {
+  fs.mkdirSync(PREVIEW_DIR, { recursive: true })
+  const tiles = []
+  for (const f of inputs) {
+    const def = fmts[f.key].def
+    const t = (d) => `<text x="${d.x * f.width}" y="${d.y * f.height}" font-family="Georgia, serif" font-size="${d.sz}" fill="${d.c}" font-weight="${d.b ? 700 : 400}" text-anchor="middle" dominant-baseline="middle">${d.t.replace(/&/g, '&amp;')}</text>`
+    const svg = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${f.width}" height="${f.height}">${def.map(t).join('')}<text x="24" y="70" font-size="56" fill="#d83232" font-family="Arial">${f.key}</text></svg>`)
+    const full = await sharp({ create: { width: f.width, height: f.height, channels: 3, background: '#9db0b6' } }).composite([{ input: f.buf }, { input: svg }]).png().toBuffer()
+    tiles.push(await sharp(full).resize({ height: 600 }).png().toBuffer())
+  }
+  const metas = await Promise.all(tiles.map((x) => sharp(x).metadata()))
+  let x = 10
+  const comp = tiles.map((tile, i) => { const c = { input: tile, left: x, top: 10 }; x += metas[i].width + 10; return c })
+  await sharp({ create: { width: x, height: 620, channels: 3, background: '#ffffff' } }).composite(comp).jpeg({ quality: 82 }).toFile(path.join(PREVIEW_DIR, `${slug}.jpg`))
 }
 
 // ───────────── Storage ─────────────
@@ -403,7 +459,7 @@ async function ingest(t, existing, report) {
     const c = assigned.get(key)
     const file = normalize(c.e.name).replace(/\s+/g, '-').replace(/[^a-z0-9.-]/g, '')
     fmts[key] = { w: c.meta.width, h: c.meta.height, src: await upload(`${base}/${file}`, c.buf), ...FORMAT_META[key] }
-    aiInput.push({ key, buf: c.buf, width: c.meta.width, height: c.meta.height, hash: sha(c.buf) })
+    aiInput.push({ key, buf: c.buf, width: c.meta.width, height: c.meta.height, hash: sha(c.buf), boxes: c.h.boxes })
   }
   for (const c of cands) if (!c.used) extra.push(c)
   if (!Object.keys(fmts).length) { r.action = 'ignoré'; r.warnings.push('aucun format reconnu'); return }
@@ -415,12 +471,14 @@ async function ingest(t, existing, report) {
     try { ai = await analyze(t.name, aiInput) } catch (err) { r.warnings.push(`IA : ${err.message}`) }
   }
   if (ai?.style) style = ai.style
+  if (ai?.issues?.length) r.warnings.push(...ai.issues.map((i) => `à vérifier — ${i}`))
   for (const [key, f] of Object.entries(fmts)) {
     const prevDef = prev?.fmts?.[key]?.def
     const a = ai?.formats?.find((x) => x.key === key)
     f.def = KEEP_DEF && prevDef ? prevDef : a ? toDef(a, key) : prevDef ?? neutralDef(key)
   }
   r.ai = ai ? 'ok' : USE_AI ? 'échec' : '—'
+  if (PREVIEW) await contactSheet(slug, aiInput, fmts)
 
   // Fichiers annexes, aperçu, écrans d'accueil, chiffres
   const preview_url = preview ? await upload(`${base}/preview.jpg`, await sharp(await preview.read()).resize({ width: 900, withoutEnlargement: true }).jpeg({ quality: 84 }).toBuffer()) : prev?.preview_url ?? null

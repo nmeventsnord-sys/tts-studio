@@ -7,3 +7,4 @@ dist
 env.download
 *.log
 scripts/.ingest-cache.json
+scripts/.ingest-apercu/
