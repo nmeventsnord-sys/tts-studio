@@ -363,9 +363,16 @@ function placementIssues(f, a) {
 
 const hex = (c, d) => (/^#[0-9a-f]{6}$/i.test(c ?? '') ? c : d)
 const clamp = (v, a, b) => Math.min(b, Math.max(a, Number(v) || 0))
-const toDef = (a, key) => {
+const toDef = (a, key, W) => {
   const book = key.startsWith('s')
-  const one = (t, v, d) => ({ t, x: +clamp(v.x, book ? 0.03 : 0.05, book ? 0.47 : 0.95).toFixed(3), y: +clamp(v.y, 0.03, 0.97).toFixed(3), sz: Math.round(clamp(v.size, 18, 400)), c: hex(v.color, d), b: !!v.bold })
+  const right = book ? 0.5 : 1
+  const one = (t, v, d) => {
+    const x = clamp(v.x, book ? 0.03 : 0.05, book ? 0.47 : 0.95)
+    // garde-fou : un texte qui déborderait du cadre (ou de la bande gauche) est réduit pour tenir
+    const room = 2 * Math.min(x, right - x) * 0.96
+    const fit = (room * W) / (0.55 * t.length)
+    return { t, x: +x.toFixed(3), y: +clamp(v.y, 0.03, 0.97).toFixed(3), sz: Math.round(clamp(Math.min(v.size, fit), 18, 400)), c: hex(v.color, d), b: !!v.bold }
+  }
   return [one('Sophie & Marc', a.names, '#1a1410'), one('14 juin 2025', a.date, '#C9A84C')]
 }
 
@@ -487,7 +494,7 @@ async function ingest(t, existing, report) {
   for (const [key, f] of Object.entries(fmts)) {
     const prevDef = prev?.fmts?.[key]?.def
     const a = ai?.formats?.find((x) => x.key === key)
-    f.def = KEEP_DEF && prevDef ? prevDef : a ? toDef(a, key) : prevDef ?? neutralDef(key)
+    f.def = KEEP_DEF && prevDef ? prevDef : a ? toDef(a, key, f.w) : prevDef ?? neutralDef(key)
   }
   r.ai = ai ? 'ok' : USE_AI ? 'échec' : '—'
   if (PREVIEW) await contactSheet(slug, aiInput, fmts)
@@ -597,3 +604,19 @@ if (warn.length) {
   for (const r of warn) console.log(`  • ${r.name} : ${r.warnings.join(' ; ')}`)
 }
 console.log(`\nTerminé en ${Math.round((Date.now() - t0) / 1000)} s${DRY ? ' (simulation : rien n’a été envoyé ni écrit)' : ''}.\n`)
+
+// Page récapitulative des planches de contrôle (--apercu) : scripts/.ingest-apercu/index.html
+if (PREVIEW && fs.existsSync(PREVIEW_DIR)) {
+  const files = fs.readdirSync(PREVIEW_DIR).filter((f) => f.endsWith('.jpg')).sort()
+  const warned = new Map(report.filter((r) => r.warnings.length).map((r) => [r.slug, r.warnings]))
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
+  const html = `<!doctype html><html lang="fr"><meta charset="utf-8"><title>Planches de contrôle</title>
+<style>body{font-family:Poppins,system-ui,sans-serif;background:#F7F5F2;color:#1a1410;margin:0;padding:24px}h1{font-size:20px;color:#0C2830}
+section{background:#fff;border:1px solid #e6e2da;border-radius:12px;padding:12px 14px;margin:0 0 16px}h2{font-size:14px;margin:0 0 8px}
+img{width:100%;height:auto;display:block;border-radius:6px}.w{color:#c0392b;font-size:12px;margin:0 0 8px}</style>
+<h1>Planches de contrôle — ${files.length} thème(s)</h1>
+${files.map((f) => { const slug = f.replace(/\.jpg$/, ''); const w = warned.get(slug); return `<section id="${esc(slug)}"><h2>${esc(slug)}</h2>${w ? `<p class="w">⚠ ${esc(w.join(' ; '))}</p>` : ''}<img loading="lazy" src="${esc(f)}" alt=""></section>` }).join('\n')}
+</html>`
+  fs.writeFileSync(path.join(PREVIEW_DIR, 'index.html'), html)
+  console.log(`Planches : ${path.join(PREVIEW_DIR, 'index.html')}`)
+}
