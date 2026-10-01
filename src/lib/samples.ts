@@ -60,10 +60,19 @@ export function findHoles(src: string | HTMLImageElement | HTMLCanvasElement): P
     const g = c.getContext('2d', { willReadFrequently: true })!
     g.drawImage(el, 0, 0, W, H)
     const d = g.getImageData(0, 0, W, H).data
+    // masque transparent rogné d'1 px (liserés autour des photos, comme le script d'ingestion)
+    const raw = new Uint8Array(W * H)
+    for (let i = 0; i < W * H; i++) raw[i] = d[i * 4 + 3] <= 24 ? 1 : 0
+    const mask = raw.slice()
+    for (let i = 0; i < W * H; i++) {
+      if (!raw[i]) continue
+      const x = i % W
+      if (x === 0 || x === W - 1 || i < W || i >= W * (H - 1) || !raw[i - 1] || !raw[i + 1] || !raw[i - W] || !raw[i + W]) mask[i] = 0
+    }
     const seen = new Uint8Array(W * H)
     const boxes: Box[] = []
     for (let p0 = 0; p0 < W * H; p0++) {
-      if (seen[p0] || d[p0 * 4 + 3] > 24) continue
+      if (seen[p0] || !mask[p0]) continue
       let n = 0, x0 = W, x1 = 0, y0 = H, y1 = 0
       const stack = [p0]
       seen[p0] = 1
@@ -77,9 +86,9 @@ export function findHoles(src: string | HTMLImageElement | HTMLCanvasElement): P
         if (y < y0) y0 = y
         if (y > y1) y1 = y
         for (const r of [x > 0 ? q - 1 : -1, x < W - 1 ? q + 1 : -1, y > 0 ? q - W : -1, y < H - 1 ? q + W : -1])
-          if (r >= 0 && !seen[r] && d[r * 4 + 3] <= 24) { seen[r] = 1; stack.push(r) }
+          if (r >= 0 && !seen[r] && mask[r]) { seen[r] = 1; stack.push(r) }
       }
-      if (n > W * H * 0.006) boxes.push([x0 / W, y0 / H, (x1 + 1) / W, (y1 + 1) / H])
+      if (n > W * H * 0.006) boxes.push([Math.max(0, x0 - 1) / W, Math.max(0, y0 - 1) / H, Math.min(W, x1 + 2) / W, Math.min(H, y1 + 2) / H])
     }
     // ordre de lecture : de haut en bas, puis de gauche à droite
     return boxes.sort((a, b) => (Math.abs(a[1] - b[1]) < 0.03 ? a[0] - b[0] : a[1] - b[1]))

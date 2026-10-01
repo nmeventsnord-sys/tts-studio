@@ -176,10 +176,20 @@ async function holes(buf) {
   const { data, info } = await sharp(buf).ensureAlpha().resize({ width: W }).raw().toBuffer({ resolveWithObject: true })
   const w = info.width
   const h = info.height
+  // masque des pixels transparents, rogné d'1 px : les liserés transparents qui entourent
+  // certaines photos (séparés du trou par un trait) ne comptent plus comme des trous en plus
+  const raw = new Uint8Array(w * h)
+  for (let p = 0; p < w * h; p++) raw[p] = data[p * 4 + 3] <= 24 ? 1 : 0
+  const mask = raw.slice()
+  for (let p = 0; p < w * h; p++) {
+    if (!raw[p]) continue
+    const x = p % w
+    if (x === 0 || x === w - 1 || p < w || p >= w * (h - 1) || !raw[p - 1] || !raw[p + 1] || !raw[p - w] || !raw[p + w]) mask[p] = 0
+  }
   const seen = new Uint8Array(w * h)
   const comps = []
   for (let p = 0; p < w * h; p++) {
-    if (seen[p] || data[p * 4 + 3] > 24) continue
+    if (seen[p] || !mask[p]) continue
     let n = 0
     let minX = w, maxX = 0, minY = h, maxY = 0
     const stack = [p]
@@ -194,9 +204,9 @@ async function holes(buf) {
       if (y < minY) minY = y
       if (y > maxY) maxY = y
       for (const r of [x > 0 ? q - 1 : -1, x < w - 1 ? q + 1 : -1, y > 0 ? q - w : -1, y < h - 1 ? q + w : -1])
-        if (r >= 0 && !seen[r] && data[r * 4 + 3] <= 24) { seen[r] = 1; stack.push(r) }
+        if (r >= 0 && !seen[r] && mask[r]) { seen[r] = 1; stack.push(r) }
     }
-    if (n > w * h * 0.006) comps.push({ n, cx: (minX + maxX) / 2 / w, box: [minX / w, minY / h, (maxX + 1) / w, (maxY + 1) / h] })
+    if (n > w * h * 0.006) comps.push({ n, cx: (minX + maxX) / 2 / w, box: [Math.max(0, minX - 1) / w, Math.max(0, minY - 1) / h, Math.min(w, maxX + 2) / w, Math.min(h, maxY + 2) / h] })
   }
   return { count: comps.length, share: comps.reduce((s, c) => s + c.n, 0) / (w * h), left: comps.filter((c) => c.cx < 0.5).length, boxes: comps.map((c) => c.box) }
 }
@@ -435,8 +445,12 @@ async function upload(p, buf) {
   // simulation avec aperçu : fichiers déposés à part (apercu/…) pour un rendu fidèle, sans toucher aux thèmes en ligne
   if (DRY && PREVIEW) p = `apercu/${p}`
   if (!DRY || PREVIEW) {
-    const { error } = await sb.storage.from(BUCKET).upload(p, buf, { upsert: true, contentType: CT[ext] ?? 'application/octet-stream', cacheControl: '31536000' })
-    if (error) throw new Error(`envoi ${p} : ${error.message}`)
+    for (let i = 1; ; i++) {
+      const { error } = await sb.storage.from(BUCKET).upload(p, buf, { upsert: true, contentType: CT[ext] ?? 'application/octet-stream', cacheControl: '31536000' })
+      if (!error) break
+      if (i >= 3) throw new Error(`envoi ${p} : ${error.message || error.name || 'erreur réseau'}`)
+      await new Promise((ok) => setTimeout(ok, 3000 * i))
+    }
   }
   // ?v= = empreinte du contenu : l'URL change seulement si le fichier change
   return `${sb.storage.from(BUCKET).getPublicUrl(p).data.publicUrl}?v=${sha(buf).slice(0, 10)}`
@@ -567,7 +581,11 @@ async function ingest(t, existing, report) {
     aiInput.push({ key, buf: c.buf, width: c.meta.width, height: c.meta.height, hash: sha(c.buf), boxes: c.h.boxes })
   }
   for (const c of cands) if (!c.used) extra.push(c)
-  if (!Object.keys(fmts).length) { r.action = 'ignoré'; r.warnings.push('aucun format reconnu'); return }
+  if (!Object.keys(fmts).length) {
+    r.action = 'ignoré'
+    r.warnings.push(cands.length && cands.every((c) => !c.h || c.h.share === 0) ? 'les PNG n\u2019ont aucune zone transparente (emplacements photo remplis) : à refaire avec des trous transparents' : 'aucun format reconnu')
+    return
+  }
 
   // Textes par défaut + style
   let style = prev?.style ?? null
