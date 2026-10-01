@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { lazy, Suspense, type ReactNode } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { useSession } from './lib/session'
 import Auth from './screens/Auth'
@@ -6,9 +6,11 @@ import ResetPassword from './screens/ResetPassword'
 import Parcours from './screens/Parcours'
 import Galerie from './screens/Galerie'
 import Formats from './screens/Formats'
-import Editor from './screens/Editor'
 import Projets from './screens/Projets'
 import Envoye from './screens/Envoye'
+
+// L'éditeur (Fabric, outils image) est chargé à la demande : accueil et galerie s'ouvrent plus vite.
+const Editor = lazy(() => import('./screens/Editor'))
 
 /** Toutes les pages du Studio demandent une identité (compte ou invité). */
 function RequireIdentity({ children }: { children: ReactNode }) {
@@ -29,7 +31,7 @@ export default function App() {
       <Route path="/" element={guard(<Parcours />)} />
       <Route path="/themes" element={guard(<Galerie />)} />
       <Route path="/formats/:themeId" element={guard(<Formats />)} />
-      <Route path="/editeur" element={guard(<Editor />)} />
+      <Route path="/editeur" element={guard(<Suspense fallback={<div className="spinner" />}><Editor /></Suspense>)} />
       <Route path="/projets" element={guard(<Projets />)} />
       <Route path="/envoye" element={guard(<Envoye />)} />
       <Route path="*" element={<Navigate to="/" replace />} />

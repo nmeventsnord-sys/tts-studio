@@ -5,7 +5,9 @@ import { esc, layout, sendMail } from './_lib/brevo.js'
 export default handler(async (req) => {
   const { email, redirectTo } = req.body ?? {}
   if (!isEmail(email)) throw new HttpError(400, 'Email invalide.')
-  const allowed = [process.env.PUBLIC_URL, 'http://localhost:5173'].filter(Boolean) as string[]
+  // Adresses autorisées pour le retour du lien : domaine public, previews Vercel, développement local.
+  const vercel = [process.env.VERCEL_BRANCH_URL, process.env.VERCEL_URL].filter(Boolean).map((h) => `https://${h}`)
+  const allowed = [process.env.PUBLIC_URL, ...vercel, 'http://localhost:5173'].filter(Boolean) as string[]
   const target =
     typeof redirectTo === 'string' && allowed.some((o) => redirectTo.startsWith(o)) ? redirectTo : `${allowed[0]}/reinitialiser`
 
