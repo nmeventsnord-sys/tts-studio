@@ -7,7 +7,7 @@
  *
  * Options :
  *   --dry-run        analyse et rapport seulement (aucun envoi, aucune écriture, pas d'IA sauf --ai)
- *   --only=<texte>   ne traite que les thèmes dont le nom contient ce texte
+ *   --only=<texte>   ne traite que les thèmes dont le nom contient ce texte (plusieurs : séparés par des virgules)
  *   --limit=<n>      s'arrête après n thèmes
  *   --no-ai          pas d'analyse IA : garde les textes par défaut déjà en base (ou des valeurs neutres)
  *   --reanalyze      ignore le cache IA local (scripts/.ingest-cache.json)
@@ -48,7 +48,7 @@ const REANALYZE = flag('reanalyze')
 const KEEP_DEF = flag('keep-def')
 const PREVIEW = flag('apercu')
 const PREVIEW_DIR = path.join(HERE, '.ingest-apercu')
-const ONLY = opt('only')?.toLowerCase()
+const ONLY = opt('only')?.toLowerCase().split(',').map((x) => x.trim()).filter(Boolean)
 const LIMIT = Number(opt('limit') ?? Infinity)
 
 const ROOT = process.env.TEMPLATES_PATH?.trim()
@@ -106,6 +106,8 @@ const STYLES = ['Bohème', 'Élégant', 'Minimaliste', 'Festif', 'Rustique', 'Mo
 
 /** Nom de police lisible depuis un nom de fichier (« MavenPro-Black.ttf » → « MavenPro Black »). */
 const fontNameFromFile = (file) => path.basename(file).replace(FONT, '').replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim()
+/** Variante d'une famille (« Lato Black », « Poppins SemiBoldItalic ») : pas d'entrée dans la bibliothèque. */
+const isVariant = (name) => /(thin|extra ?light|ultra ?light|light|medium|semi ?bold|demi ?bold|bold|extra ?bold|ultra ?bold|black|heavy|italic|oblique)$/i.test(name.replace(/\s*regular$/i, '').trim()) && !/regular$/i.test(name)
 const guessFontCategory = (n) => {
   n = n.toLowerCase()
   if (/script|vibes|brush|signature|hand|callig|love|wedding|swash|monoline|belle|allura|parisienne|ballet|romance/.test(n)) return 'mariage'
@@ -541,7 +543,7 @@ if (error) fail(`lecture de la table themes : ${error.message}`)
 const existing = new Map(rows.filter((r) => r.slug).map((r) => [r.slug, r]))
 
 let themes = discover()
-if (ONLY) themes = themes.filter((t) => t.name.toLowerCase().includes(ONLY) || slugify(t.name).includes(ONLY))
+if (ONLY?.length) themes = themes.filter((t) => ONLY.some((o) => t.name.toLowerCase().includes(o) || slugify(t.name).includes(o)))
 themes = themes.slice(0, LIMIT)
 console.log(`${themes.length} thème(s) à traiter\n`)
 
@@ -568,7 +570,7 @@ if (allFonts.length) {
   const { data: lib } = await sb.from('fonts_library').select('name')
   const have = new Set((lib ?? []).map((f) => f.name.toLowerCase()))
   const add = []
-  for (const f of allFonts.filter((f) => f.source === 'file')) {
+  for (const f of allFonts.filter((f) => f.source === 'file' && !isVariant(f.name))) {
     if (have.has(f.name.toLowerCase())) continue
     have.add(f.name.toLowerCase())
     add.push({ name: f.name, url: f.url.split('?')[0], category: guessFontCategory(f.name) })
