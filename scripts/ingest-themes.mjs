@@ -70,6 +70,16 @@ const WORKSPACE = process.env.ANTHROPIC_WORKSPACE_ID?.trim()
 const anthropic = USE_AI ? new Anthropic(WORKSPACE ? { defaultHeaders: { 'anthropic-workspace-id': WORKSPACE } } : {}) : null
 const cache = fs.existsSync(CACHE_FILE) ? JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8')) : {}
 
+/** Lecture tolérante : Google Drive (mode diffusion) échoue parfois sur les gros fichiers pas encore rapatriés. */
+function readFileRetry(file, tries = 4) {
+  for (let i = 1; ; i++) {
+    try { return fs.readFileSync(file) } catch (e) {
+      if (i >= tries) throw new Error(`lecture impossible (${e.code ?? e.message}) — rends le dossier « Disponible hors connexion » dans Google Drive puis relance`)
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 4000 * i) // pause, le temps que Drive rapatrie le fichier
+    }
+  }
+}
+
 function fail(msg) { console.error(`\n✖ ${msg}\n`); process.exit(1) }
 
 // ───────────── utilitaires ─────────────
@@ -130,7 +140,7 @@ async function entriesFromDir(dir, base = dir) {
     const rel = path.relative(base, full).split(path.sep).join('/')
     if (IGNORE.test(rel)) continue
     if (d.isDirectory()) out.push(...(await entriesFromDir(full, base)))
-    else if (/\.zip$/i.test(d.name)) out.push(...(await entriesFromZip(fs.readFileSync(full), rel.replace(/\.zip$/i, '') + '/')))
+    else if (/\.zip$/i.test(d.name)) out.push(...(await entriesFromZip(readFileRetry(full), rel.replace(/\.zip$/i, '') + '/')))
     else if (IMG.test(d.name) || FONT.test(d.name) || /documentation\.txt$/i.test(d.name)) out.push({ path: rel, name: d.name, read: async () => fs.readFileSync(full) })
   }
   return out
@@ -391,7 +401,7 @@ async function ingest(t, existing, report) {
   const slug = slugify(t.name)
   const r = { slug, name: t.name, warnings: [] }
   report.push(r)
-  const entries = t.zip ? await entriesFromZip(fs.readFileSync(t.source)) : await entriesFromDir(t.source)
+  const entries = t.zip ? await entriesFromZip(readFileRetry(t.source)) : await entriesFromDir(t.source)
   const base = `themes/${slug}`
   const prev = existing.get(slug)
 
@@ -414,7 +424,7 @@ async function ingest(t, existing, report) {
     fonts.push({ name, url, source: 'file' })
   }
   for (const d of docFonts) {
-    if (/fonts\.google\.com/.test(d.url) && !seenFont.has(d.name.toLowerCase())) {
+    if (/google/i.test(d.url) && !seenFont.has(d.name.toLowerCase())) {
       seenFont.add(d.name.toLowerCase())
       fonts.push({ name: d.name, url: `https://fonts.googleapis.com/css2?family=${d.name.replace(/ /g, '+')}:wght@400;700&display=swap`, source: 'google' })
     } else if (!seenFont.has(d.name.toLowerCase())) r.warnings.push(`police « ${d.name} » requise mais absente des fichiers`)
