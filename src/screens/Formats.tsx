@@ -69,7 +69,7 @@ export default function Formats() {
                 })
               : formats.map(([k, f, meta]) => (
                   <button className="fmt" key={k} onClick={() => open(k)}>
-                    <div className="pv"><TemplatePreview fmt={f} font={theme!.font_name} info={info} category={theme!.category} bookmark={meta.bookmark} width={f.w * Math.min(PV_H / f.h, 190 / f.w)} className="pvbox" /></div>
+                    <div className="pv"><TemplatePreview fmt={f} font={theme!.font_name} info={info} category={theme!.category} seed={theme!.slug} bookmark={meta.bookmark} width={f.w * Math.min(PV_H / f.h, 190 / f.w)} className="pvbox" /></div>
                     <h4>{meta.title}</h4><p>{meta.sub}</p>
                   </button>
                 ))}

@@ -51,6 +51,7 @@ export function ThemeThumb({ theme, info }: { theme: Theme; info: EventInfo }) {
                 font={theme.font_name}
                 info={info}
                 category={theme.category}
+                seed={theme.slug}
                 bookmark={meta.bookmark}
                 width={w}
                 className="tt-piece"

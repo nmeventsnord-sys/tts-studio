@@ -212,7 +212,7 @@ export default function Editor() {
     if (!ed || !spec) return
     let ok = true
     ;(async () => {
-      const urls = samplePhotos(theme?.category)
+      const urls = samplePhotos(theme?.category, theme?.slug)
       const imgs = await Promise.all(urls.map(loadImage))
       const bg = ed.canvas.backgroundImage as { getElement?: () => HTMLImageElement } | undefined
       let holes: { box: [number, number, number, number]; img: HTMLImageElement }[] = []

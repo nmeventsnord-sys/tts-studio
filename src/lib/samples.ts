@@ -3,34 +3,29 @@
  * (aperçus, galerie, éditeur). Purement visuel : le PNG envoyé garde ses trous transparents.
  * Photos Unsplash (licence Unsplash : usage commercial autorisé), dans public/exemples/.
  */
+const COUPLES = ['couple-AD3k4pko7wo', 'couple-fNIfLGQGfi8', 'couple-Tk-a9GSBBJA', 'couple-YsTrevaOoqU']
 const BRIDES = ['mariage-nKcjbmB0Xhg', 'mariage-l0uf7VoUVjY', 'mariage-dtCFC0RMnQg', 'mariage-CHKW7YpLaJQ', 'mariage-V5ztZUM9gP8', 'mariage-5e882r559kI']
 const PARTY = ['fete-Ehk94eNSk7Q', 'fete-eKFlLghqrXg', 'fete-XQu534-OKkM', 'fete-pFVyQPdx1rA']
 const url = (n: string) => `/exemples/${n}.jpg`
 
-/** Photos dans l'ordre d'utilisation pour une catégorie (mariées d'abord pour un mariage). */
-export function samplePhotos(category?: string | null): string[] {
-  const list = category === 'mariage' ? [...BRIDES, ...PARTY] : [...PARTY, ...BRIDES]
-  return list.map(url)
+/**
+ * Photos d'exemple d'une catégorie, la première étant celle à montrer : couples pour un mariage,
+ * groupes pour une fête. Le `seed` (slug du thème) varie la photo d'un thème à l'autre.
+ */
+export function samplePhotos(category?: string | null, seed?: string | null): string[] {
+  const base = category === 'mariage' ? [...COUPLES, ...BRIDES, ...PARTY] : [...PARTY, ...COUPLES, ...BRIDES]
+  const pool = category === 'mariage' ? COUPLES.length : PARTY.length
+  let h = 0
+  for (const ch of seed ?? '') h = (h * 31 + ch.charCodeAt(0)) >>> 0
+  const n = h % pool
+  return [...base.slice(n, pool), ...base.slice(0, n), ...base.slice(pool)].map(url)
 }
 
 export type Box = [number, number, number, number] // x0, y0, x1, y1 en fractions
 
-/**
- * Photo de chaque emplacement : une différente par emplacement ; pour un marque-page double,
- * la bande de droite reprend la photo de l'emplacement correspondant à gauche.
- */
-export function assignPhotos(boxes: Box[], photos: string[], bookmark = false): string[] {
-  const out: string[] = []
-  let n = 0
-  const left = boxes.map((b, i) => ({ b, i })).filter(({ b }) => !bookmark || (b[0] + b[2]) / 2 < 0.5)
-  for (const { i } of left) out[i] = photos[n++ % photos.length]
-  if (bookmark)
-    boxes.forEach((b, i) => {
-      if (out[i]) return
-      const twin = left.find(({ b: l }) => Math.abs(l[1] - b[1]) < 0.03 && Math.abs(l[0] + 0.5 - b[0]) < 0.06)
-      out[i] = twin ? out[twin.i] : photos[n++ % photos.length]
-    })
-  return out
+/** Photo de chaque emplacement : la même partout, comme sur les exemples des vendeurs. */
+export function assignPhotos(boxes: Box[], photos: string[], _bookmark = false): string[] {
+  return boxes.map(() => photos[0])
 }
 
 const cache = new Map<string, Promise<Box[]>>()

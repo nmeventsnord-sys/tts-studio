@@ -9,6 +9,8 @@ type Props = {
   font: string | null
   info: EventInfo
   category?: string | null
+  /** Varie la photo d'exemple d'un thème à l'autre (slug du thème). */
+  seed?: string | null
   bookmark?: boolean
   width: number
   className?: string
@@ -19,7 +21,7 @@ type Props = {
  * Aperçu fidèle d'un format : photos d'exemple dans les emplacements, PNG du thème par-dessus,
  * textes par défaut dans leurs polices (avec les prénoms et la date saisis).
  */
-export function TemplatePreview({ fmt, font, info, category, bookmark, width, className, style }: Props) {
+export function TemplatePreview({ fmt, font, info, category, seed, bookmark, width, className, style }: Props) {
   const k = width / fmt.w
   const height = fmt.h * k
   const [boxes, setBoxes] = useState<Box[] | null>(fmt.holes ?? null)
@@ -31,7 +33,7 @@ export function TemplatePreview({ fmt, font, info, category, bookmark, width, cl
     return () => { ok = false }
   }, [fmt.src, fmt.thumb, fmt.holes])
 
-  const photos = boxes ? assignPhotos(boxes, samplePhotos(category), bookmark) : []
+  const photos = boxes ? assignPhotos(boxes, samplePhotos(category, seed), bookmark) : []
 
   return (
     <div className={'tplpv ' + (className ?? '')} style={{ width, height, ...style }}>
