@@ -405,6 +405,21 @@ export class StudioEditor {
     return img
   }
 
+  /** Pose un nombre en chiffres PNG du thème, centré sur (x, y), de hauteur h (px du document). */
+  async addDigits(urls: string[], x: number, y: number, h: number) {
+    const imgs = await Promise.all(urls.map((u) => FabricImage.fromURL(u, { crossOrigin: 'anonymous' }) as Promise<FabricImage & EditorObject>))
+    const ks = imgs.map((i) => h / i.height)
+    const total = imgs.reduce((s, i, n) => s + i.width * ks[n], 0)
+    let left = x - total / 2
+    imgs.forEach((img, n) => {
+      const w = img.width * ks[n]
+      img.set({ left: left + w / 2, top: y, scaleX: ks[n], scaleY: ks[n] })
+      img.role = 'digit'
+      this.add(img)
+      left += w
+    })
+  }
+
   /** Remplace le contenu d'une image (gomme, baguette, détourage) en gardant position et taille. */
   async replaceImage(o: FabricImage & EditorObject, url: string, srcKey: string) {
     await o.setSrc(url, { crossOrigin: 'anonymous' })

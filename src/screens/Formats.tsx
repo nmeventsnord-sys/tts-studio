@@ -5,7 +5,7 @@ import { Help } from '../components/Help'
 import { FREE_FORMATS, readInfo, saveInfo, themeFormats, type EventInfo, type FreeFormatKey } from '../data/formats'
 import { loadFonts } from '../lib/fonts'
 import { TemplatePreview } from '../components/TemplatePreview'
-import { getTheme, type Theme } from '../lib/themes'
+import { getTheme, themeDigits, type Theme } from '../lib/themes'
 
 const PV_H = 150
 
@@ -69,7 +69,7 @@ export default function Formats() {
                 })
               : formats.map(([k, f, meta]) => (
                   <button className="fmt" key={k} onClick={() => open(k)}>
-                    <div className="pv"><TemplatePreview fmt={f} font={theme!.font_name} info={info} category={theme!.category} seed={theme!.slug} bookmark={meta.bookmark} width={f.w * Math.min(PV_H / f.h, 190 / f.w)} className="pvbox" /></div>
+                    <div className="pv"><TemplatePreview fmt={f} font={theme!.font_name} info={info} category={theme!.category} seed={theme!.slug} digits={themeDigits(theme)} bookmark={meta.bookmark} width={f.w * Math.min(PV_H / f.h, 190 / f.w)} className="pvbox" /></div>
                     <h4>{meta.title}</h4><p>{meta.sub}</p>
                   </button>
                 ))}

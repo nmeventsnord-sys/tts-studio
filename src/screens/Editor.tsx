@@ -13,7 +13,7 @@ import { Tutorial, type TutoStep } from '../editor/Tutorial'
 import { FREE_FORMATS, THEME_FORMATS, defText, readInfo, type FreeFormatKey } from '../data/formats'
 import { loadLibrary, type LibraryFont } from '../data/fontLibrary'
 import { loadFont, loadFonts } from '../lib/fonts'
-import { getTheme, type DefText, type FormatKey, type Theme, type ThemeFont } from '../lib/themes'
+import { digitUrls, getTheme, themeDigits, type DefText, type FormatKey, type Theme, type ThemeFont } from '../lib/themes'
 import { useSession } from '../lib/session'
 import { MasterStore, convertV1, projectStore, readProject, type ProjectData, type ProjectMeta, type ProjectRow } from '../lib/projects'
 import { Help } from '../components/Help'
@@ -154,18 +154,21 @@ export default function Editor() {
         else e.setBackgroundColor('#ffffff')
         const info = readInfo()
         const mainFont = themeFonts[0]?.name
-        ;(spec.def ?? []).forEach((d, i) => {
+        const tdig = themeDigits(theme)
+        for (const [i, d] of (spec.def ?? []).entries()) {
           let x = d.x
           if (spec.bookmark) {
             // Les textes des marque-pages sont posés sur la bande de gauche ; la droite est la copie.
-            if (x > 0.6) return
+            if (x > 0.6) continue
             if (x >= 0.4) x = x / 2
           }
+          const nums = digitUrls(d.t, tdig)
+          if (nums) { await e.addDigits(nums, x * spec.w, d.y * spec.h, d.sz * 0.8); continue }
           e.addText({
             text: defText(d.t, i, info, d.r), x: x * spec.w, y: d.y * spec.h, size: d.sz, color: d.c,
             font: d.f ?? mainFont, bold: d.b, italic: d.i, align: d.al, spacing: d.ls, role: d.r === 'other' ? 'text' : d.r ?? (i === 0 ? 'names' : 'date'),
           }, false)
-        })
+        }
         e.resetHistory()
         if (!alive) return
         setEd(e)

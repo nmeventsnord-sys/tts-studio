@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { TemplatePreview } from './TemplatePreview'
 import { themeFormats, type EventInfo } from '../data/formats'
 import { loadFonts } from '../lib/fonts'
-import type { Theme } from '../lib/themes'
+import { themeDigits, type Theme } from '../lib/themes'
 
 const W = 400
 const H = 300
@@ -52,6 +52,7 @@ export function ThemeThumb({ theme, info }: { theme: Theme; info: EventInfo }) {
                 info={info}
                 category={theme.category}
                 seed={theme.slug}
+                digits={themeDigits(theme)}
                 bookmark={meta.bookmark}
                 width={w}
                 className="tt-piece"

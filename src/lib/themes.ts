@@ -31,6 +31,16 @@ export const CATEGORIES = [
 /** Styles proposés en filtre (le script d'ingestion déduit l'un d'eux pour chaque thème). */
 export const STYLES = ['Bohème', 'Élégant', 'Minimaliste', 'Festif', 'Rustique', 'Moderne', 'Vintage', 'Coloré'] as const
 
+/** Chiffres PNG du thème (« 0 »…« 9 » → URL), ou null s'il n'y en a pas. */
+export function themeDigits(t: { digits?: unknown } | null | undefined): Record<string, string> | null {
+  const d = (t?.digits ?? null) as Record<string, string> | null
+  return d && Object.keys(d).some((k) => /^\d$/.test(k) && d[k]) ? d : null
+}
+
+/** Un texte composé uniquement de chiffres (« 30 », « 2035 ») se dessine avec les chiffres PNG du thème. */
+export const digitUrls = (text: string, digits: Record<string, string> | null): string[] | null =>
+  digits && /^\d{1,4}$/.test(text.trim()) && [...text.trim()].every((c) => digits[c]) ? [...text.trim()].map((c) => digits[c]) : null
+
 /** Anciens noms Google Fonts renommés. */
 const ALIAS: Record<string, string> = { 'Fredoka One': 'Fredoka' }
 
