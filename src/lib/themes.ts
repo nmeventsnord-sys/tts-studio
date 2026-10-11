@@ -31,6 +31,29 @@ export const CATEGORIES = [
 /** Styles proposés en filtre (le script d'ingestion déduit l'un d'eux pour chaque thème). */
 export const STYLES = ['Bohème', 'Élégant', 'Minimaliste', 'Festif', 'Rustique', 'Moderne', 'Vintage', 'Coloré'] as const
 
+/** Anciens noms Google Fonts renommés. */
+const ALIAS: Record<string, string> = { 'Fredoka One': 'Fredoka' }
+
+/**
+ * Ajoute à un thème les polices utilisées par ses textes mais absentes de sa liste (Google Fonts),
+ * sinon elles s'afficheraient dans la police de repli.
+ */
+function completeFonts(t: Theme): Theme {
+  const fonts = [...(t.fonts ?? [])]
+  const have = new Set(fonts.map((f) => f.name.toLowerCase()))
+  const fmts = t.fmts ? { ...t.fmts } : t.fmts
+  for (const [k, f] of Object.entries(fmts ?? {}) as [FormatKey, ThemeFormat][]) {
+    const def = (f.def ?? []).map((d) => (d.f && ALIAS[d.f] ? { ...d, f: ALIAS[d.f] } : d))
+    fmts![k] = { ...f, def }
+    for (const d of def) {
+      if (!d.f || have.has(d.f.toLowerCase())) continue
+      have.add(d.f.toLowerCase())
+      fonts.push({ name: d.f, source: 'google', url: `https://fonts.googleapis.com/css2?family=${d.f.replace(/ /g, '+')}:ital,wght@0,400;0,700;1,400&display=swap` })
+    }
+  }
+  return { ...t, fonts, fmts }
+}
+
 let cache: Promise<Theme[]> | null = null
 
 /** Thèmes actifs (la RLS anon ne renvoie déjà que active = true). Chargés une fois par session. */
@@ -43,7 +66,7 @@ export function loadThemes(): Promise<Theme[]> {
       .order('sort_order', { ascending: true, nullsFirst: false })
       .order('name')
     if (error) { cache = null; throw new Error('Impossible de charger les thèmes : ' + error.message) }
-    return (data ?? []) as Theme[]
+    return ((data ?? []) as Theme[]).map(completeFonts)
   })()
   return cache
 }
