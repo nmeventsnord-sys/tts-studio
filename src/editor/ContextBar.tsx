@@ -3,7 +3,7 @@ import { IText } from 'fabric'
 import type { StudioEditor } from './engine'
 import type { ThemeFont } from '../lib/themes'
 import { ColorRow } from './ColorRow'
-import { FONT_CATS } from '../data/fontLibrary'
+import { FontPicker } from './FontPicker'
 
 type Props = {
   ed: StudioEditor
@@ -51,22 +51,12 @@ export function ContextBar({ ed, fonts, palette, onFont }: Props) {
     >
       {t && (
         <>
-          <select
-            aria-label="Police"
-            value={t.fontFamily}
-            style={{ fontFamily: `"${t.fontFamily}"` }}
-            onChange={(e) => { const f = fonts.find((x) => x.name === e.target.value); if (f) onFont(f) }}
-          >
-            {!fonts.some((f) => f.name === t.fontFamily) && <option>{t.fontFamily}</option>}
-            {[{ key: 'template', label: 'Polices du template' }, ...FONT_CATS].map((g) => {
-              const list = fonts.filter((f) => ((f as { category?: string }).category ?? 'template') === g.key)
-              return list.length ? (
-                <optgroup key={g.key} label={g.label}>
-                  {list.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
-                </optgroup>
-              ) : null
-            })}
-          </select>
+          <FontPicker
+            fonts={fonts}
+            used={ed.objects.filter((x): x is IText => x instanceof IText).map((x) => x.fontFamily as string)}
+            value={t.fontFamily as string}
+            onPick={onFont}
+          />
           <div className="sep" />
           <button aria-label="Réduire la taille" onClick={() => ed.update(t, { fontSize: Math.max(6, size - 2) })}>−</button>
           <span className="num">{size}</span>

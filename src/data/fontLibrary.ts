@@ -49,6 +49,26 @@ export function familyName(raw: string): string | null {
   return base.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/\s+/g, ' ')
 }
 
+/**
+ * Polices du template à proposer : une entrée par famille (sans « Thin », « ExtraLightItalic », fichiers variables…),
+ * en gardant toujours celles déjà utilisées par les textes du document.
+ */
+export function templateFonts<T extends ThemeFont>(fonts: T[], used: string[] = []): T[] {
+  const key = (n: string) => (familyName(n) ?? n).replace(/\s+/g, '').toLowerCase()
+  const keep = new Set(used)
+  const seen = new Set<string>()
+  const out: T[] = []
+  for (const f of fonts) {
+    if (keep.has(f.name)) { seen.add(key(f.name)); out.push(f) }
+  }
+  for (const f of fonts) {
+    if (keep.has(f.name) || familyName(f.name) === null || seen.has(key(f.name))) continue
+    seen.add(key(f.name))
+    out.push(f)
+  }
+  return fonts.filter((f) => out.includes(f))
+}
+
 let cache: Promise<LibraryFont[]> | null = null
 
 /** Bibliothèque : fonts_library (fichiers issus des thèmes) + sélection Google, dédoublonnées. */

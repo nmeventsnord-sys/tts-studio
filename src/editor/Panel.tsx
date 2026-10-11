@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { FabricImage, IText } from 'fabric'
 import type { StudioEditor } from './engine'
 import type { ThemeFont } from '../lib/themes'
-import { FONT_CATS, loadLibrary, type FontCat, type LibraryFont } from '../data/fontLibrary'
+import { FONT_CATS, loadLibrary, templateFonts, type FontCat, type LibraryFont } from '../data/fontLibrary'
 import { fold } from '../lib/themes'
 import { loadFont } from '../lib/fonts'
 import { ColorRow } from './ColorRow'
@@ -82,6 +82,7 @@ export function Panel({ ed, themeFonts, palette, onFont, onAddText, onCutout }: 
   }
 
   const isImage = o instanceof FabricImage
+  const tplFonts = templateFonts(themeFonts, ed.objects.filter((x): x is IText => x instanceof IText).map((x) => x.fontFamily as string))
   const color = String(o.fill ?? '#000')
   const opacity = Math.round((o.opacity ?? 1) * 100)
   const fontRow = (f: ThemeFont, tag?: boolean) => (
@@ -147,7 +148,7 @@ export function Panel({ ed, themeFonts, palette, onFont, onAddText, onCutout }: 
           <input className="range" type="range" min={0.7} max={2.5} step={0.05} value={t.lineHeight ?? 1} aria-label="Interligne"
             onChange={(e) => ed.update(t, { lineHeight: Number(e.target.value) })} />
 
-          {themeFonts.length > 0 && <><h5>POLICES DU TEMPLATE</h5>{themeFonts.map((f) => fontRow(f, true))}</>}
+          {tplFonts.length > 0 && <><h5>POLICES DU TEMPLATE</h5>{tplFonts.map((f) => fontRow(f, true))}</>}
 
           <h5>POLICES EN PLUS</h5>
           <input className="fsearch" placeholder="Rechercher une police…" value={q} onChange={(e) => setQ(e.target.value)} />
