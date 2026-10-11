@@ -55,7 +55,9 @@ const LIMIT = Number(opt('limit') ?? Infinity)
 const ROOT = process.env.TEMPLATES_PATH?.trim()
 const BUCKET = 'template'
 const MODEL = 'claude-opus-5-5'
-const PROMPT_VERSION = 'v3-exemple'
+const PROMPT_VERSION = 'v4-polices'
+/** Polices Google proposées en complément quand celles du ZIP ne correspondent pas à l'exemple. */
+const GOOGLE_EXTRA = ['Great Vibes', 'Dancing Script', 'Parisienne', 'Allura', 'Alex Brush', 'Pinyon Script', 'Sacramento', 'Tangerine', 'Italianno', 'Playfair Display', 'Cormorant Garamond', 'Cinzel', 'Forum', 'Marcellus', 'Lora', 'Libre Baskerville', 'Bodoni Moda', 'Prata', 'Italiana', 'Gilda Display', 'Tenor Sans', 'Poppins', 'Montserrat', 'Raleway', 'Josefin Sans', 'Lato', 'Inter', 'Quicksand', 'Nunito', 'Work Sans', 'Jost', 'DM Sans', 'Outfit', 'Pacifico', 'Lobster', 'Bebas Neue', 'Anton', 'Fredoka', 'Righteous', 'Bungee', 'Satisfy', 'Amatic SC', 'Caveat', 'Shadows Into Light', 'Permanent Marker', 'Kaushan Script', 'Chewy', 'Luckiest Guy', 'Oswald', 'Abril Fatface', 'Archivo Black', 'Shrikhand', 'Bowlby One', 'Rye', 'Cinzel Decorative', 'Cormorant', 'Cormorant Infant', 'Fraunces', 'DM Serif Display', 'Aboreto', 'Quentin', 'Luxurious Script', 'Rock Salt', 'Monoton', 'Playball', 'Yellowtail', 'Lobster Two', 'Playfair Display SC', 'Syne', 'Space Grotesk', 'Rubik', 'Merriweather', 'Spectral', 'EB Garamond', 'Libre Caslon Display', 'Limelight', 'Poiret One', 'Federo']
 const CACHE_FILE = path.join(HERE, '.ingest-cache.json')
 
 if (!ROOT || !fs.existsSync(ROOT)) fail(`TEMPLATES_PATH introuvable : « ${ROOT ?? ''} » (dossier local attendu, voir .env.example)`)
@@ -308,7 +310,7 @@ Pour chaque format, recrée les textes de l'exemple pour qu'on obtienne exacteme
 - reprends chaque texte qui fait partie du design (ex. « Wedding of », « Linda & William », « 16.04.2020 », « Golden », « Champagne Party », « 2035 », « Merry Christmas », « #yourhashtag »), avec le même contenu et la même casse ;
 - N'INCLUS JAMAIS : « TemplatesBooth », « templatesbooth.com », le bandeau publicitaire (« … PHOTOBOOTH TEMPLATES ») ni le logo. Ce ne sont pas des textes du design ;
 - role : names = les prénoms (ou le prénom/nom fêté), date = la date ; un seul texte names et un seul texte date par format au maximum ; tout le reste = other ;
-- font : la police de la liste qui correspond à ce texte sur l'exemple (script, serif, sans-serif…). Les polices citées par la documentation du vendeur sont celles du design ;
+- font : la police qui correspond EXACTEMENT, lettre par lettre, à ce texte sur l'image d'exemple. Compare la forme des lettres (empattements, contraste, graisse, script ou bâton, majuscules, chiffres). Les polices listées pour le thème (fournies dans le ZIP) sont celles du design : choisis-les en priorité, en distinguant les graisses (Black, Bold, Light, Italic…) quand le nom de la police les propose. Ne prends une police de la liste « complémentaire » (Google Fonts) que si aucune police du thème ne correspond ;
 - position et taille : celles de l'exemple, transposées sur le PNG du format. Pour un format absent de l'exemple, déduis une mise en page cohérente avec les formats montrés. Aucun texte ne doit recouvrir une zone photo, ni sortir du fichier ;
 - marque-page double (deux bandes identiques côte à côte) : donne les textes de la bande de GAUCHE seulement (x < 0.5) ;
 - x, y = centre du texte en fraction du fichier entier ; size en pixels du fichier natif (dimensions indiquées) ;
@@ -317,7 +319,10 @@ Pour chaque format, recrée les textes de l'exemple pour qu'on obtienne exacteme
 const checker = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="#e4e4e4"/><rect width="8" height="8" fill="#bdbdbd"/><rect x="8" y="8" width="8" height="8" fill="#bdbdbd"/></svg>')
 
 async function analyze(theme, formats, exampleBuf, fonts) {
-  const fontNames = [...new Set(fonts.map((f) => f.name))]
+  const themeNames = [...new Set(fonts.map((f) => f.name))]
+  const have = new Set(themeNames.map((n) => fontKey(n)))
+  const extras = GOOGLE_EXTRA.filter((n) => !have.has(fontKey(n)))
+  const fontNames = [...themeNames, ...extras]
   // la clé change avec les images, l'exemple, les polices ET la consigne (PROMPT_VERSION)
   const key = sha(Buffer.concat([Buffer.from(PROMPT_VERSION + fontNames.join('|')), ...(exampleBuf ? [Buffer.from(sha(exampleBuf))] : []), ...formats.map((f) => Buffer.from(f.hash))]))
   if (!REANALYZE && cache[key]) return cache[key]
@@ -328,7 +333,7 @@ async function analyze(theme, formats, exampleBuf, fonts) {
     content.push({ type: 'text', text: 'IMAGE D’EXEMPLE du vendeur (référence pour les textes, polices, couleurs et positions) :' })
     content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: ex.toString('base64') } })
   }
-  content.push({ type: 'text', text: `Polices disponibles pour ce thème : ${fontNames.length ? fontNames.map((n) => `« ${n} » (${guessFontCategory(n) === 'mariage' ? 'script' : guessFontCategory(n) === 'elegantes' ? 'serif / élégante' : 'autre'})`).join(', ') : 'aucune (utilise un nom de police Google Fonts proche)'}.` })
+  content.push({ type: 'text', text: `Polices du thème (fournies dans le ZIP, à privilégier) : ${themeNames.length ? themeNames.map((n) => `« ${n} » (${guessFontCategory(n) === 'mariage' ? 'script' : guessFontCategory(n) === 'elegantes' ? 'serif / élégante' : 'autre'})`).join(', ') : 'aucune'}. Polices complémentaires (Google Fonts), seulement si aucune police du thème ne convient : ${extras.join(', ')}.` })
   for (const f of formats) {
     const small = await sharp(f.buf).resize({ width: f.width >= f.height ? 900 : 600 }).png().toBuffer()
     const meta = await sharp(small).metadata()
@@ -600,6 +605,11 @@ async function ingest(t, existing, report) {
     const prevDef = prev?.fmts?.[key]?.def
     const a = ai?.formats?.find((x) => x.key === key)
     f.def = KEEP_DEF && prevDef ? prevDef : a ? toDef(a, key, f.w) : prevDef ?? neutralDef(key)
+  }
+  // polices choisies par l'IA mais absentes du thème (liste complémentaire) : ajoutées en Google Fonts
+  for (const f of Object.values(fmts)) for (const d of f.def ?? []) {
+    if (!d.f || fonts.some((x) => fontKey(x.name) === fontKey(d.f))) continue
+    fonts.push({ name: d.f, url: 'https://fonts.googleapis.com/css2?family=' + d.f.replace(/ /g, '+') + ':ital,wght@0,400;0,700;1,400&display=swap', source: 'google' })
   }
   r.ai = ai ? 'ok' : USE_AI ? 'échec' : '—'
   if (PREVIEW) await contactSheet(slug, aiInput, fmts)
