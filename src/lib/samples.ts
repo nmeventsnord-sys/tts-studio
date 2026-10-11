@@ -4,7 +4,7 @@
  * Photos Unsplash (licence Unsplash : usage commercial autorisé), dans public/exemples/.
  */
 const COUPLES = ['couple-AD3k4pko7wo', 'couple-fNIfLGQGfi8', 'couple-Tk-a9GSBBJA', 'couple-YsTrevaOoqU']
-const BRIDES = ['mariage-nKcjbmB0Xhg', 'mariage-l0uf7VoUVjY', 'mariage-dtCFC0RMnQg', 'mariage-CHKW7YpLaJQ', 'mariage-V5ztZUM9gP8', 'mariage-5e882r559kI']
+const BRIDES = ['mariage-l0uf7VoUVjY', 'mariage-dtCFC0RMnQg', 'mariage-CHKW7YpLaJQ', 'mariage-V5ztZUM9gP8', 'mariage-5e882r559kI']
 const PARTY = ['fete-Ehk94eNSk7Q', 'fete-eKFlLghqrXg', 'fete-XQu534-OKkM', 'fete-pFVyQPdx1rA']
 const url = (n: string) => `/exemples/${n}.jpg`
 
