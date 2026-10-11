@@ -55,7 +55,7 @@ const LIMIT = Number(opt('limit') ?? Infinity)
 const ROOT = process.env.TEMPLATES_PATH?.trim()
 const BUCKET = 'template'
 const MODEL = 'claude-opus-5-5'
-const PROMPT_VERSION = 'v4-polices'
+const PROMPT_VERSION = 'v5-grille'
 /** Polices Google proposées en complément quand celles du ZIP ne correspondent pas à l'exemple. */
 const GOOGLE_EXTRA = ['Great Vibes', 'Dancing Script', 'Parisienne', 'Allura', 'Alex Brush', 'Pinyon Script', 'Sacramento', 'Tangerine', 'Italianno', 'Playfair Display', 'Cormorant Garamond', 'Cinzel', 'Forum', 'Marcellus', 'Lora', 'Libre Baskerville', 'Bodoni Moda', 'Prata', 'Italiana', 'Gilda Display', 'Tenor Sans', 'Poppins', 'Montserrat', 'Raleway', 'Josefin Sans', 'Lato', 'Inter', 'Quicksand', 'Nunito', 'Work Sans', 'Jost', 'DM Sans', 'Outfit', 'Pacifico', 'Lobster', 'Bebas Neue', 'Anton', 'Fredoka', 'Righteous', 'Bungee', 'Satisfy', 'Amatic SC', 'Caveat', 'Shadows Into Light', 'Permanent Marker', 'Kaushan Script', 'Chewy', 'Luckiest Guy', 'Oswald', 'Abril Fatface', 'Archivo Black', 'Shrikhand', 'Bowlby One', 'Rye', 'Cinzel Decorative', 'Cormorant', 'Cormorant Infant', 'Fraunces', 'DM Serif Display', 'Aboreto', 'Quentin', 'Luxurious Script', 'Rock Salt', 'Monoton', 'Playball', 'Yellowtail', 'Lobster Two', 'Playfair Display SC', 'Syne', 'Space Grotesk', 'Rubik', 'Merriweather', 'Spectral', 'EB Garamond', 'Libre Caslon Display', 'Limelight', 'Poiret One', 'Federo']
 const CACHE_FILE = path.join(HERE, '.ingest-cache.json')
@@ -311,7 +311,7 @@ Pour chaque format, recrée les textes de l'exemple pour qu'on obtienne exacteme
 - N'INCLUS JAMAIS : « TemplatesBooth », « templatesbooth.com », le bandeau publicitaire (« … PHOTOBOOTH TEMPLATES ») ni le logo. Ce ne sont pas des textes du design ;
 - role : names = les prénoms (ou le prénom/nom fêté), date = la date ; un seul texte names et un seul texte date par format au maximum ; tout le reste = other ;
 - font : la police qui correspond EXACTEMENT, lettre par lettre, à ce texte sur l'image d'exemple. Compare la forme des lettres (empattements, contraste, graisse, script ou bâton, majuscules, chiffres). Les polices listées pour le thème (fournies dans le ZIP) sont celles du design : choisis-les en priorité, en distinguant les graisses (Black, Bold, Light, Italic…) quand le nom de la police les propose. Ne prends une police de la liste « complémentaire » (Google Fonts) que si aucune police du thème ne correspond ;
-- position et taille : celles de l'exemple, transposées sur le PNG du format. Pour un format absent de l'exemple, déduis une mise en page cohérente avec les formats montrés. Aucun texte ne doit recouvrir une zone photo, ni sortir du fichier ;
+- position et taille : celles de l'exemple, transposées sur le PNG du format. MESURE x et y sur le PNG lui-même (une grille rouge indique les fractions 0.1 à 0.9 de la largeur et de la hauteur), pas sur l'exemple qui est réduit et parfois incliné. Quand le PNG contient un cartouche, un cadre ou une zone dédiée au texte, centre les textes À L'INTÉRIEUR, bien alignés les uns sous les autres (même x), avec une taille qui remplit le cadre comme sur l'exemple, sans déborder ni toucher ses bords. Pour un format absent de l'exemple, déduis une mise en page cohérente avec les formats montrés. Aucun texte ne doit recouvrir une zone photo, ni sortir du fichier ;
 - marque-page double (deux bandes identiques côte à côte) : donne les textes de la bande de GAUCHE seulement (x < 0.5) ;
 - x, y = centre du texte en fraction du fichier entier ; size en pixels du fichier natif (dimensions indiquées) ;
 - style = l'ambiance générale du thème parmi la liste.`
@@ -337,8 +337,18 @@ async function analyze(theme, formats, exampleBuf, fonts) {
   for (const f of formats) {
     const small = await sharp(f.buf).resize({ width: f.width >= f.height ? 900 : 600 }).png().toBuffer()
     const meta = await sharp(small).metadata()
+    // grille rouge (fractions 0.1 … 0.9) pour lire des positions précises sur le PNG
+    const gl = []
+    for (let i = 1; i < 10; i++) {
+      const gx = Math.round((meta.width * i) / 10), gy = Math.round((meta.height * i) / 10)
+      gl.push('<line x1="' + gx + '" y1="0" x2="' + gx + '" y2="' + meta.height + '" stroke="#e11" stroke-opacity="0.45" stroke-width="1"/>')
+      gl.push('<line x1="0" y1="' + gy + '" x2="' + meta.width + '" y2="' + gy + '" stroke="#e11" stroke-opacity="0.45" stroke-width="1"/>')
+      gl.push('<text x="' + (gx + 3) + '" y="12" font-size="12" fill="#e11" font-family="Arial">0.' + i + '</text>')
+      gl.push('<text x="3" y="' + (gy - 3) + '" font-size="12" fill="#e11" font-family="Arial">0.' + i + '</text>')
+    }
+    const grid = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="' + meta.width + '" height="' + meta.height + '">' + gl.join('') + '</svg>')
     const bg = await sharp({ create: { width: meta.width, height: meta.height, channels: 3, background: '#e4e4e4' } })
-      .composite([{ input: checker, tile: true }, { input: small }]).jpeg({ quality: 82 }).toBuffer()
+      .composite([{ input: checker, tile: true }, { input: small }, { input: grid }]).jpeg({ quality: 82 }).toBuffer()
     const holesTxt = f.boxes.map((b) => `[${b.map((v) => v.toFixed(2)).join(', ')}]`).join(' ')
     content.push({ type: 'text', text: `Format « ${f.key} » (${FORMAT_META[f.key].lbl}) — fichier natif ${f.width} × ${f.height} px${f.key.startsWith('s') ? ' — marque-page double' : ''}. Zones photo (x0, y0, x1, y1) : ${holesTxt}` })
     content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: bg.toString('base64') } })
