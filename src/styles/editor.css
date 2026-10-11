@@ -100,8 +100,8 @@
 .ctx .fpk-btn{display:flex;align-items:center;gap:6px;max-width:170px;min-width:110px;justify-content:space-between;font-size:14px;border:1px solid var(--line);background:#fff}
 .fpk-btn span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fpk-btn i{font-style:normal;color:var(--muted);flex:none}
-.fpk-pop{position:absolute;top:calc(100% + 8px);left:0;width:260px;background:#fff;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.2);padding:10px;z-index:8}
-.fpk-list{max-height:320px;overflow-y:auto;overscroll-behavior:contain}
+.fpk-pop{display:flex;flex-direction:column;background:#fff;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.2);padding:10px;z-index:8}
+.fpk-list{overflow-y:auto;flex:1;min-height:0;overscroll-behavior:contain}
 .fpk-list h6{margin:8px 0 4px;font:600 9px Poppins;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted)}
 .ctx .fpk-row{display:block;width:100%;height:auto;text-align:left;padding:7px 8px;font-size:17px;line-height:1.25;white-space:normal;border-radius:6px}
 .ctx .fpk-row.on{background:rgba(242,193,46,.22)}
